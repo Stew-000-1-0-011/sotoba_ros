@@ -1,0 +1,39 @@
+/**:
+  ros__parameters:
+    # 購読する LaserScan のトピック
+    scan_topic: "/scan"
+
+    # --- 点群の前処理 ---
+    # ICPバッファの容量。1スキャンがこれを超える分は捨てる
+    max_points: 2048
+    # 点の間引き (1なら間引かない)。計算量は点数に比例する
+    point_stride: 1
+    # 採用する距離の範囲 [m]。0以下なら LaserScan 側の range_min / range_max を使う
+    range_min: 0.0
+    range_max: 0.0
+
+    # --- ICP ---
+    max_loop_num: 20
+    # 対応点として採用する距離 [m] (最終反復のゲート)
+    accept_distance: 0.3
+    # 0より大きければ、1回目をこの距離として等比でゲートを絞る。初期ずれが大きいとき用
+    accept_distance_begin: 0.0
+    # 姿勢更新量がこれ未満になったら打ち切る。0なら打ち切らない
+    convergence_delta: 0.0
+    # Tikhonov正則化。0..2 が回転(roll, pitch, yaw)、3..5 が並進(x, y, z)。
+    # 2D LiDAR では roll / pitch / z が観測できないので、そこは必ず拘束すること。
+    # yaw の 0.01 は、円柱のような回転対称オブジェクトでランク落ちして
+    # solve_failed になるのを防ぐための気持ち程度の値
+    tikhonov: [1.0, 1.0, 0.01, 0.0, 0.0, 1.0]
+
+    # --- 重み付け (0なら無効) ---
+    # 距離方向の標準偏差 [m]
+    sigma_range: 0.0
+    # 角度方向の標準偏差 [rad]
+    sigma_angle: 0.0
+    # Huberの閾値。sigma_* が0なら単位は [m]
+    huber_k: 0.0
+
+    # --- 復帰処理 ---
+    # 連続してこの回数だけ更新に失敗したら初期姿勢へ戻す (0で無効)
+    reset_after_failures: 0

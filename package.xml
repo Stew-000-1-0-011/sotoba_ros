@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sotoba_ros</name>
+  <version>0.0.0</version>
+  <description>
+    sotoba の点対面ICPで、LaserScan から既知オブジェクト群の LiDAR座標系での姿勢を推定し Pose を publish するノード。
+  </description>
+  <maintainer email="shnsk0204@gmail.com">Stew</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>eigen</depend>
+
+  <!-- sotoba は rosdep に無いので、find_package(sotoba) が通るよう
+       事前に install するか、SOTOBA_ROS_FETCH_SOTOBA=ON でビルドすること。
+       (README 参照) -->
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_copyright</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
