@@ -19,6 +19,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # --- sotoba ---
@@ -74,6 +75,24 @@ add_library(sotoba_ros_objects STATIC
 target_link_libraries(sotoba_ros_objects PUBLIC sotoba_ros_icp_engine)
 set_target_properties(sotoba_ros_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# --- RViz2 表示用のマーカー ---
+# ICPとは独立なので別TU。
+add_library(sotoba_ros_markers STATIC
+	src/markers.cpp
+)
+target_include_directories(sotoba_ros_markers
+	PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>
+)
+target_link_libraries(sotoba_ros_markers
+	PUBLIC
+		sotoba::sotoba
+		${visualization_msgs_TARGETS}
+		${geometry_msgs_TARGETS}
+)
+set_target_properties(sotoba_ros_markers PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # --- ノード本体 ---
 add_library(sotoba_ros_node STATIC
 	src/sotoba_node_impl.cpp
@@ -82,9 +101,11 @@ add_library(sotoba_ros_node STATIC
 target_link_libraries(sotoba_ros_node
 	PUBLIC
 		sotoba_ros_icp_engine
+		sotoba_ros_markers
 		rclcpp::rclcpp
 		${sensor_msgs_TARGETS}
 		${geometry_msgs_TARGETS}
+		${visualization_msgs_TARGETS}
 )
 set_target_properties(sotoba_ros_node PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

@@ -16,6 +16,8 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 | `src/objects.cpp` | **オブジェクトの実体。ここを書き換えて使う** |
 | `include/sotoba_ros/icp_engine.hpp` | ICPラッパのインタフェース。sotobaのICPヘッダは出てこない (pimpl) |
 | `src/icp_engine.cpp` | sotobaのICPテンプレートを実体化する唯一のTU |
+| `include/sotoba_ros/markers.hpp` | 形状を RViz2 の Marker にする関数の宣言 |
+| `src/markers.cpp` | 形状 -> MarkerArray の変換 (ICPとは独立の別TU) |
 | `include/sotoba_ros/sotoba_node.hpp` | ノード `SotobaNode` の宣言。オブジェクト群はコンストラクタで受け取る |
 | `src/sotoba_node_impl.cpp` | ノードの実装 (ROSの入出力とパラメータ) |
 | `src/sotoba_node.cpp` | `main()`。`make_objects()` の結果をノードへ渡す |
@@ -77,6 +79,7 @@ ros2 run sotoba_ros sotoba_node --ros-args --params-file config/sotoba_node.yaml
 | sub | `scan_topic` パラメータ (既定 `/scan`) | `sensor_msgs/msg/LaserScan` |
 | pub | `~/objects/<name>/pose` | `geometry_msgs/msg/PoseStamped` |
 | pub | `~/object_poses` | `geometry_msgs/msg/PoseArray` |
+| pub | `~/object_markers` | `visualization_msgs/msg/MarkerArray` (RViz2用、transient local) |
 
 publish される姿勢は「オブジェクトローカル座標系をLiDAR座標系へ写す SE3」、
 すなわち **LiDARから見たオブジェクトの位置姿勢**。
@@ -112,6 +115,40 @@ python3 test/scan_sim.py
 - ROS 2 Lyrical Luth (Ubuntu 26.04, GCC 15.2) のコンテナで
   `colcon build` / `colcon test` / 上記の手動テストが通ることを確認済み。
   手動テストでのロボット姿勢の復元誤差は 0.000 m / 0.000 rad だった。
+- 手動テストは Marker の中身も検証する (フィールドの枠線32点が全て壁の上に乗るか、
+  円柱Markerの位置とスケールが合っているか)。
+- RViz2 (Xvfb上のヘッドレス) で実際に表示されることも確認済み。上のスクリーンショットがそれ。
+
+## RViz2 で見る
+
+姿勢だけでなく形状も `~/object_markers` (MarkerArray) で出している。
+バンドルした設定で RViz2 ごと起動できる。
+
+```bash
+ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
+```
+
+(`rviz:=true` は rviz2 が入っている前提。package.xml には入れていないので、
+必要なら `apt install ros-$ROS_DISTRO-rviz2`。ノード側の依存ではない)
+
+![RViz2 表示例](docs/rviz.png)
+
+上の画像は `test/scan_sim.py` の合成スキャンを流したもの。
+緑の枠線が推定姿勢に置いたフィールドの壁 (天井と床は無効にしてあるので4枚)、
+その上に乗っている白い点が `/scan`、中央左の円柱がポール、
+赤緑青の軸が `~/object_poses` の姿勢。
+
+- 形状は**推定姿勢に置いた状態**で描かれる。スキャンの点と枠線がズレていたら、
+  それがそのまま推定のズレ。
+- 直近のスキャンで更新できなかったオブジェクトは灰色half透明で描かれる
+  (姿勢は最後に成功した値のまま)。
+- Marker は transient local で publish しているので、RViz2 を後から起動しても出る。
+- ノードは TF を publish しない (全部LiDAR座標系で完結する)。
+  RViz2 の Fixed Frame は LaserScan の `frame_id` に合わせること。
+  TF を誰も流していないと `Frame [xxx] does not exist` と警告が出るが、表示はされる。
+
+表示の調整は `marker_line_width` / `marker_lifetime` / `marker_normal_length` /
+`marker_show_labels` / `publish_markers` で行う。
 
 ## パラメータ
 
@@ -126,6 +163,7 @@ python3 test/scan_sim.py
 - `max_points` / `point_stride`: 計算量は点数に比例する。UST-10LXなら間引かなくても足りるはず。
 - `sigma_range` / `sigma_angle` / `huber_k`: 外れ値が多いときに効かせる。0で無効。
 - `reset_after_failures`: 連続失敗が続いたら `initial_pose` に戻す。0で無効。
+- `publish_markers` ほか `marker_*`: RViz2 表示用。上の節を参照。
 
 ## オブジェクトの書き方
 

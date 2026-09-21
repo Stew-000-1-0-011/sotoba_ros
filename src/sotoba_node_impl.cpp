@@ -18,11 +18,13 @@
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <sotoba/math/se3.hpp>
 #include <sotoba/math/vec.hpp>
 
 #include "sotoba_ros/icp_engine.hpp"
+#include "sotoba_ros/markers.hpp"
 
 namespace sotoba_ros {
 	namespace {
@@ -75,6 +77,7 @@ namespace sotoba_ros {
 
 		std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> pose_pubs{};
 		rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pose_array_pub{};
+		rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub{};
 		rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub{};
 
 		// --- パラメータ ---
@@ -84,6 +87,8 @@ namespace sotoba_ros {
 		float range_max{0.f};
 		std::size_t reset_after_failures{0};
 		IcpParams icp_params{};
+		bool publish_markers{true};
+		MarkerStyle marker_style{};
 
 		explicit Impl(rclcpp::Node& node, std::vector<ObjectDef>&& objects)
 			: node{node}, objects{std::move(objects)} {
@@ -146,6 +151,17 @@ namespace sotoba_ros {
 			}
 			const auto huber_k = n.declare_parameter<double>("huber_k", 0.0);
 			if (huber_k > 0.0) { this->icp_params.huber_k = static_cast<float>(huber_k); }
+
+			// --- RViz2 表示 ---
+			this->publish_markers = n.declare_parameter<bool>("publish_markers", true);
+			this->marker_style.line_width =
+				static_cast<float>(n.declare_parameter<double>("marker_line_width", 0.03));
+			this->marker_style.lifetime =
+				static_cast<float>(n.declare_parameter<double>("marker_lifetime", 0.0));
+			this->marker_style.normal_length =
+				static_cast<float>(n.declare_parameter<double>("marker_normal_length", 0.2));
+			this->marker_style.show_labels =
+				n.declare_parameter<bool>("marker_show_labels", true);
 		}
 
 		void prepare_objects() {
@@ -189,6 +205,14 @@ namespace sotoba_ros {
 			}
 			this->pose_array_pub =
 				n.create_publisher<geometry_msgs::msg::PoseArray>("~/object_poses", rclcpp::QoS{10});
+
+			if (this->publish_markers) {
+				// RViz2 を後から起動しても形状が見えるよう transient local にする。
+				this->marker_pub = n.create_publisher<visualization_msgs::msg::MarkerArray>(
+					"~/object_markers",
+					rclcpp::QoS{1}.transient_local()
+				);
+			}
 		}
 
 		void create_sub() {
@@ -310,8 +334,17 @@ namespace sotoba_ros {
 			array.header.frame_id = scan.header.frame_id;
 			array.poses.reserve(this->objects.size());
 
+			// マーカー用。更新できなかったオブジェクトも、最後の姿勢で色を変えて出す。
+			std::vector<SE3> poses{};
+			std::vector<std::uint8_t> fresh{};
+			poses.reserve(this->objects.size());
+			fresh.reserve(this->objects.size());
+
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
 				const auto status = this->engine->status(iobj);
+				poses.emplace_back(this->engine->pose(iobj));
+				fresh.emplace_back(status == ObjectStatus::updated ? 1 : 0);
+
 				if (status != ObjectStatus::updated) {
 					++this->failure_counts[iobj];
 					RCLCPP_WARN_THROTTLE(
@@ -327,6 +360,7 @@ namespace sotoba_ros {
 					if (this->reset_after_failures != 0
 						&& this->failure_counts[iobj] >= this->reset_after_failures) {
 						this->engine->set_pose(iobj, this->initial_poses[iobj]);
+						poses.back() = this->initial_poses[iobj];
 						this->failure_counts[iobj] = 0;
 						RCLCPP_WARN(
 							this->node.get_logger(),
@@ -349,6 +383,17 @@ namespace sotoba_ros {
 			}
 
 			if (!array.poses.empty()) { this->pose_array_pub->publish(array); }
+
+			if (this->marker_pub) {
+				this->marker_pub->publish(build_object_markers(
+					std::span{this->objects},
+					std::span{poses},
+					std::span{fresh},
+					scan.header.frame_id,
+					scan.header.stamp,
+					this->marker_style
+				));
+			}
 		}
 	};
 

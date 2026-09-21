@@ -34,6 +34,18 @@
     # Huberの閾値。sigma_* が0なら単位は [m]
     huber_k: 0.0
 
+    # --- RViz2 表示 ---
+    # オブジェクトの形状を MarkerArray で出すか
+    publish_markers: true
+    # 枠線の太さ [m]
+    marker_line_width: 0.03
+    # Marker の寿命 [s]。0なら消えない
+    marker_lifetime: 0.0
+    # 長方形の法線を描く長さ [m]。0なら描かない
+    marker_normal_length: 0.2
+    # オブジェクト名をテキストで出すか
+    marker_show_labels: true
+
     # --- 復帰処理 ---
     # 連続してこの回数だけ更新に失敗したら初期姿勢へ戻す (0で無効)
     reset_after_failures: 0

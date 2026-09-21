@@ -19,6 +19,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped
+from visualization_msgs.msg import MarkerArray
 
 # フィールド: 原点中心 12m x 12m (half 6)。ポール: (-1, 1) 半径 0.15
 HALF = 6.0
@@ -66,9 +67,13 @@ class Sim(Node):
         self.create_subscription(
             PoseStamped, "/sotoba_node/objects/pole/pose", self.on_pole, 10
         )
+        self.create_subscription(
+            MarkerArray, "/sotoba_node/object_markers", self.on_markers, 10
+        )
         self.create_timer(0.1, self.tick)
         self.field_msgs = []
         self.pole_msgs = []
+        self.markers = None
 
     def tick(self):
         msg = LaserScan()
@@ -91,6 +96,9 @@ class Sim(Node):
 
     def on_pole(self, msg):
         self.pole_msgs.append(msg)
+
+    def on_markers(self, msg):
+        self.markers = msg
 
 
 def yaw_of(q):
@@ -130,19 +138,54 @@ def main():
         if abs(p.pose.position.z) > 1e-3:
             print("NG: z drifted")
             ok = False
+    th, (tx, ty) = TRUE_YAW, TRUE_XY
+    ex = math.cos(-th) * (POLE[0] - tx) - math.sin(-th) * (POLE[1] - ty)
+    ey = math.sin(-th) * (POLE[0] - tx) + math.cos(-th) * (POLE[1] - ty)
     if not node.pole_msgs:
         print("NG: no pole pose published")
         ok = False
     else:
         p = node.pole_msgs[-1].pose.position
-        # ポールはフィールド座標(-1, 1)、ロボットから見ると約 (1.7, 0.85) 付近
-        th, (tx, ty) = TRUE_YAW, TRUE_XY
-        ex = math.cos(-th) * (POLE[0] - tx) - math.sin(-th) * (POLE[1] - ty)
-        ey = math.sin(-th) * (POLE[0] - tx) + math.cos(-th) * (POLE[1] - ty)
         err = math.hypot(p.x - ex, p.y - ey)
         print(f"pole (laser): est=({p.x:.3f}, {p.y:.3f}) truth=({ex:.3f}, {ey:.3f}) err={err:.4f}")
         if err > 0.1:
             ok = False
+
+    # --- マーカー ---
+    if node.markers is None:
+        print("NG: no markers published")
+        ok = False
+    else:
+        names = sorted({m.ns for m in node.markers.markers})
+        lines = [m for m in node.markers.markers if m.ns == "field"]
+        cyl = [m for m in node.markers.markers if m.ns == "pole/cylinder"]
+        print(f"marker namespaces: {names}")
+        if not lines or not cyl:
+            print("NG: missing field wireframe or pole cylinder marker")
+            ok = False
+        else:
+            pts = lines[0].points
+            # laser系 -> field系 に戻して、全点が壁の上 (|x|=6 か |y|=6) に乗るか
+            th, (tx, ty) = TRUE_YAW, TRUE_XY
+            bad = 0
+            for q in pts:
+                fx = math.cos(th) * q.x - math.sin(th) * q.y + tx
+                fy = math.sin(th) * q.x + math.cos(th) * q.y + ty
+                on_wall = abs(abs(fx) - HALF) < 1e-2 or abs(abs(fy) - HALF) < 1e-2
+                if not on_wall or abs(abs(q.z) - 1.0) > 1e-2:
+                    bad += 1
+            print(f"field wireframe: {len(pts)} points, off-wall points: {bad}")
+            # 天井/床を消しているので、壁4枚 x 4辺 x 2点 = 32点のはず
+            if bad or len(pts) != 32:
+                ok = False
+            c = cyl[0].pose.position
+            derr = math.hypot(c.x - ex, c.y - ey)
+            print(
+                f"pole cylinder marker: pos=({c.x:.3f}, {c.y:.3f}) "
+                f"scale=({cyl[0].scale.x:.2f}, {cyl[0].scale.z:.2f}) err={derr:.4f}"
+            )
+            if derr > 0.1 or abs(cyl[0].scale.x - 0.3) > 1e-3 or abs(cyl[0].scale.z - 1.0) > 1e-3:
+                ok = False
 
     node.destroy_node()
     rclpy.shutdown()
