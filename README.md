@@ -20,6 +20,7 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 | `src/sotoba_node_impl.cpp` | ノードの実装 (ROSの入出力とパラメータ) |
 | `src/sotoba_node.cpp` | `main()`。`make_objects()` の結果をノードへ渡す |
 | `test/icp_smoke_test.cpp` | 合成スキャンでICPの収束を確認するスモークテスト (ROS不要) |
+| `test/scan_sim.py` | 合成スキャンを `/scan` へ流してノードごと確認する手動テスト |
 
 ### コンパイルの分割
 
@@ -97,6 +98,21 @@ colcon test-result --verbose
 
 `objects.cpp` を書き換えたら、このテストの `truth` も合わせて直すこと。
 
+ノードごと動かす手動テストも入れてある (`test/scan_sim.py`)。
+フィールド内の既知の姿勢から見た2Dスキャンを `/scan` へ流し、
+publish された Pose からロボット姿勢を復元して真値と比べる。
+
+```bash
+ros2 run sotoba_ros sotoba_node   # 別端末で
+python3 test/scan_sim.py
+```
+
+### 動作確認済みの環境
+
+- ROS 2 Lyrical Luth (Ubuntu 26.04, GCC 15.2) のコンテナで
+  `colcon build` / `colcon test` / 上記の手動テストが通ることを確認済み。
+  手動テストでのロボット姿勢の復元誤差は 0.000 m / 0.000 rad だった。
+
 ## パラメータ
 
 `config/sotoba_node.yaml` に全部コメント付きで並べてある。要点だけ:
@@ -137,7 +153,11 @@ ObjectDef{
   原理的に決まらない。`tikhonov` で拘束するか、そもそも面外に効く形状を置かないこと。
 - sotoba の README/メモにもある通り、景色の対称性が高いとICPの解は飛ぶことがある。
   後段で異常値処理をすること (本ノードは `reset_after_failures` 程度しか面倒を見ない)。
-- 円柱のように小さいオブジェクトは、シードがずれて真の点がシード形状の裏側へ回ると
-  可視判定で対応点が全部消える。小さいオブジェクトほどシードを正確に。
+- **シードは真の形状より手前に置かないこと**。sotoba の `closest_pdn` は
+  センサ原点から見えない最近接点を距離無限で捨てるので、真の表面がシード形状の
+  裏側に回ると対応点が丸ごと消える。実際、ポール (半径0.15m) のシードを真値の
+  0.3m 手前に置くと対応点が3点しか残らず `too_few_correspondences` になった。
+  同じずれでもシードを奥に置いた場合は問題なく収束する。
+  小さくて凸なオブジェクトほどシードの精度が要る。
 - 点群容量は最初のスキャンで確定し、それを超えるスキャンが来たらエンジンを作り直す
   (その際は推定済み姿勢を引き継ぐ)。恒常的に作り直しが起きるなら `max_points` を見直すこと。

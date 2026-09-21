@@ -112,7 +112,7 @@ install(DIRECTORY config launch
 if(BUILD_TESTING)
 	find_package(ament_lint_auto REQUIRED)
 	# コピーライトヘッダは付けない方針なので除外
-	set(ament_cmake_copyright_FOUND TRUE)
+	list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_copyright)
 	ament_lint_auto_find_test_dependencies()
 
 	# ROSに依存しないスモークテスト。
@@ -123,7 +123,11 @@ if(BUILD_TESTING)
 			sotoba_ros_icp_engine
 			sotoba_ros_objects
 	)
-	add_test(NAME sotoba_ros_icp_smoke COMMAND sotoba_ros_icp_smoke_test)
+	# ament_add_test を使う (素の add_test だと結果ファイルが出ず colcon test-result から見えない)
+	ament_add_test(sotoba_ros_icp_smoke
+		COMMAND "$<TARGET_FILE:sotoba_ros_icp_smoke_test>"
+		GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+	)
 endif()
 
 ament_package()
