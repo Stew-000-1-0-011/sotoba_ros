@@ -120,7 +120,20 @@ target_link_libraries(sotoba_node
 		rclcpp::rclcpp
 )
 
-install(TARGETS sotoba_node
+# --- テスト用の合成スキャン publisher ---
+# objects.cpp の形状からスキャンを作って流す。実機が無くても一通り動かせる。
+add_executable(fake_scan_publisher
+	test/fake_scan_publisher.cpp
+)
+target_link_libraries(fake_scan_publisher
+	PRIVATE
+		sotoba_ros_objects
+		rclcpp::rclcpp
+		${sensor_msgs_TARGETS}
+		${geometry_msgs_TARGETS}
+)
+
+install(TARGETS sotoba_node fake_scan_publisher
 	DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/
