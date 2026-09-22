@@ -112,10 +112,13 @@ namespace sotoba_ros {
 
 		/// ノーツ1個。床に置かれた立方体。
 		///
-		/// フィールドの子オブジェクトにしてあるので、initial_pose は
-		/// **フィールド座標系**での姿勢 (JSONの notes.* の座標そのまま)。
-		/// 毎スキャン、フィールドの推定姿勢からシードが作り直されるので、
-		/// ロボットが動いてもノーツを見失わない。
+		/// 引数はフィールド座標系での位置 (JSONの notes.* の座標そのまま)。
+		/// initial_pose は他のオブジェクトと同じくLiDAR座標系なので、
+		/// 初期ロボット姿勢を通して変換する。
+		///
+		/// 2スキャン目以降、ノーツをフィールドに追従させる (ロボットが動いても
+		/// 見失わないようにする) のは事前予測の仕事で、
+		/// field_note_predictor ノードがやる。
 		auto make_note(const char* const name, const float x, const float y) -> ObjectDef {
 			std::vector<Surface> surfaces{};
 			surfaces.emplace_back(sotoba::surface::BoxOuter(
@@ -129,8 +132,8 @@ namespace sotoba_ros {
 			return ObjectDef{
 				.name = name,
 				.surfaces = std::move(surfaces),
-				.initial_pose = SE3::trans(Vec3{x, y, 0.f}),
-				.parent = "field",
+				.initial_pose = robot_pose_to_object_pose(start_x, start_y, start_yaw)
+					* SE3::trans(Vec3{x, y, 0.f}),
 			};
 		}
 
@@ -200,8 +203,7 @@ namespace sotoba_ros {
 		std::vector<ObjectDef> objects{};
 		objects.emplace_back(make_field());
 
-		// ノーツ (JSON: notes.blue / notes.orange)。
-		// フィールドの子オブジェクトなので、座標はフィールド座標系のまま書ける。
+		// ノーツ (JSON: notes.blue / notes.orange)。座標はフィールド座標系。
 		//
 		// 注意: 走査面 (lidar_height) はノーツの上端 (0.15m) すれすれなので、
 		// 当たる点は1個あたり10数点しかない。さらに、
