@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
-project(sotoba_ros CXX)
+# rosidl は C のターゲットも作るので C も有効にする
+project(sotoba_ros C CXX)
 
 # sotoba が deducing this (P0847) と多次元 operator[] (P2128) を使うので C++23 必須。
 set(CMAKE_CXX_STANDARD 23)
@@ -20,6 +21,8 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # --- sotoba ---
@@ -50,6 +53,39 @@ if(NOT sotoba_FOUND)
 		)
 	endif()
 endif()
+
+# --- メッセージ ---
+# 信念分布 (事前/事後) のやりとり用。sotoba_node と外部の予測ノードの契約。
+rosidl_generate_interfaces(${PROJECT_NAME}
+	"msg/InformationBlock.msg"
+	"msg/BeliefArray.msg"
+	DEPENDENCIES std_msgs geometry_msgs
+)
+rosidl_get_typesupport_target(belief_msgs_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+# --- 信念分布 (ROS非依存の部分) ---
+add_library(sotoba_ros_belief STATIC
+	src/belief.cpp
+)
+target_include_directories(sotoba_ros_belief
+	PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>
+)
+target_link_libraries(sotoba_ros_belief PUBLIC sotoba::sotoba Eigen3::Eigen)
+set_target_properties(sotoba_ros_belief PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# --- 信念分布 <-> メッセージ ---
+add_library(sotoba_ros_belief_msg STATIC
+	src/belief_msg.cpp
+)
+target_link_libraries(sotoba_ros_belief_msg
+	PUBLIC
+		sotoba_ros_belief
+		${geometry_msgs_TARGETS}
+		${belief_msgs_target}
+)
+set_target_properties(sotoba_ros_belief_msg PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- ICP ラッパ ---
 # sotoba の ICP テンプレートの実体化はこのターゲットに閉じ込める。
@@ -102,6 +138,7 @@ target_link_libraries(sotoba_ros_node
 	PUBLIC
 		sotoba_ros_icp_engine
 		sotoba_ros_markers
+		sotoba_ros_belief_msg
 		rclcpp::rclcpp
 		${sensor_msgs_TARGETS}
 		${geometry_msgs_TARGETS}
@@ -133,7 +170,17 @@ target_link_libraries(fake_scan_publisher
 		${geometry_msgs_TARGETS}
 )
 
-install(TARGETS sotoba_node fake_scan_publisher
+# --- 事前予測ノード (アプリ固有の例) ---
+add_executable(field_note_predictor
+	src/field_note_predictor.cpp
+)
+target_link_libraries(field_note_predictor
+	PRIVATE
+		sotoba_ros_belief_msg
+		rclcpp::rclcpp
+)
+
+install(TARGETS sotoba_node fake_scan_publisher field_note_predictor
 	DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/

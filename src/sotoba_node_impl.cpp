@@ -23,6 +23,8 @@
 #include <sotoba/math/se3.hpp>
 #include <sotoba/math/vec.hpp>
 
+#include "sotoba_ros/belief.hpp"
+#include "sotoba_ros/belief_msg.hpp"
 #include "sotoba_ros/icp_engine.hpp"
 #include "sotoba_ros/markers.hpp"
 
@@ -65,8 +67,19 @@ namespace sotoba_ros {
 		rclcpp::Node& node;
 
 		std::vector<ObjectDef> objects;
+		std::vector<std::string> names;
 		std::vector<std::string> topic_names;
 		std::vector<std::size_t> failure_counts;
+
+		/// 直近の事後分布。次スキャンの事前のもとになる。
+		std::vector<Belief> beliefs{};
+		/// 外部から来た事前 (まだ使っていなければ has_external_prior が true)。
+		std::vector<Belief> external_prior{};
+		bool has_external_prior{false};
+		rclcpp::Time external_prior_stamp{};
+		/// 前スキャンの時刻。dt を出すのに使う。
+		rclcpp::Time last_scan_stamp{};
+		bool has_last_scan{false};
 
 		/// 点群容量が足りなくなったら作り直すので optional。
 		std::unique_ptr<IcpEngine> engine{};
@@ -76,7 +89,9 @@ namespace sotoba_ros {
 		std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> pose_pubs{};
 		rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pose_array_pub{};
 		rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub{};
+		rclcpp::Publisher<msg::BeliefArray>::SharedPtr posterior_pub{};
 		rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub{};
+		rclcpp::Subscription<msg::BeliefArray>::SharedPtr prior_sub{};
 
 		// --- パラメータ ---
 		std::size_t max_points{2048};
@@ -87,6 +102,10 @@ namespace sotoba_ros {
 		IcpParams icp_params{};
 		bool publish_markers{true};
 		MarkerStyle marker_style{};
+		/// internal / external / external_or_internal
+		std::string prior_source{"internal"};
+		ProcessNoise process_noise{};
+		double prior_timeout{0.5};
 
 		explicit Impl(rclcpp::Node& node, std::vector<ObjectDef>&& objects)
 			: node{node}, objects{std::move(objects)} {
@@ -150,6 +169,23 @@ namespace sotoba_ros {
 			const auto huber_k = n.declare_parameter<double>("huber_k", 0.0);
 			if (huber_k > 0.0) { this->icp_params.huber_k = static_cast<float>(huber_k); }
 
+			// --- 事前分布 ---
+			this->prior_source = n.declare_parameter<std::string>("prior_source", "internal");
+			if (this->prior_source != "internal" && this->prior_source != "external"
+				&& this->prior_source != "external_or_internal") {
+				RCLCPP_WARN(
+					n.get_logger(),
+					"unknown prior_source '%s'. falling back to 'internal'.",
+					this->prior_source.c_str()
+				);
+				this->prior_source = "internal";
+			}
+			this->process_noise.angular =
+				static_cast<float>(n.declare_parameter<double>("process_noise_angular", 0.5));
+			this->process_noise.linear =
+				static_cast<float>(n.declare_parameter<double>("process_noise_linear", 0.5));
+			this->prior_timeout = n.declare_parameter<double>("prior_timeout", 0.5);
+
 			// --- RViz2 表示 ---
 			this->publish_markers = n.declare_parameter<bool>("publish_markers", true);
 			this->marker_style.line_width =
@@ -166,6 +202,9 @@ namespace sotoba_ros {
 			auto& n = this->node;
 
 			this->topic_names.reserve(this->objects.size());
+			this->names.reserve(this->objects.size());
+			this->beliefs.assign(this->objects.size(), Belief{});
+			this->external_prior.assign(this->objects.size(), Belief{});
 
 			std::unordered_map<std::string, std::size_t> used{};
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
@@ -185,6 +224,9 @@ namespace sotoba_ros {
 					used.emplace(topic, iobj);
 				}
 				this->topic_names.emplace_back(std::move(topic));
+				this->names.emplace_back(obj.name);
+				// 初期姿勢が最初の事前。情報行列ゼロ = 「姿勢以外に何も知らない」
+				this->beliefs[iobj].mean = obj.initial_pose;
 			}
 			this->failure_counts.assign(this->objects.size(), 0);
 		}
@@ -202,6 +244,9 @@ namespace sotoba_ros {
 			}
 			this->pose_array_pub =
 				n.create_publisher<geometry_msgs::msg::PoseArray>("~/object_poses", rclcpp::QoS{10});
+
+			this->posterior_pub =
+				n.create_publisher<msg::BeliefArray>("~/posterior_beliefs", rclcpp::QoS{10});
 
 			if (this->publish_markers) {
 				// RViz2 を後から起動しても形状が見えるよう transient local にする。
@@ -222,11 +267,22 @@ namespace sotoba_ros {
 					this->on_scan(*msg);
 				}
 			);
+			if (this->prior_source != "internal") {
+				this->prior_sub = n.create_subscription<msg::BeliefArray>(
+					"~/prior_beliefs",
+					rclcpp::QoS{10},
+					[this](const msg::BeliefArray::ConstSharedPtr message) {
+						this->on_prior(*message);
+					}
+				);
+			}
+
 			RCLCPP_INFO(
 				n.get_logger(),
-				"subscribing '%s' for %zu object(s)",
+				"subscribing '%s' for %zu object(s), prior_source = %s",
 				topic.c_str(),
-				this->objects.size()
+				this->objects.size(),
+				this->prior_source.c_str()
 			);
 		}
 
@@ -260,15 +316,7 @@ namespace sotoba_ros {
 					std::span<const ObjectDef>{this->objects},
 					capacity
 				);
-				for (const auto& warning : engine->warnings()) {
-					RCLCPP_WARN(this->node.get_logger(), "%s", warning.c_str());
-				}
-				// 作り直しでも推定済みの姿勢は引き継ぐ。
-				if (this->engine) {
-					for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
-						engine->set_pose(iobj, this->engine->pose(iobj));
-					}
-				}
+				// 作り直しでも信念は引き継ぐ (シードは毎スキャン入れ直すので姿勢は任意)。
 				this->engine = std::move(engine);
 			} catch (const std::exception& e) {
 				RCLCPP_ERROR_THROTTLE(
@@ -285,6 +333,86 @@ namespace sotoba_ros {
 				"ICP engine (re)built with points_capacity = %zu",
 				capacity
 			);
+			return true;
+		}
+
+		/// 外部予測ノードからの事前。ここでは溜めるだけで、
+		/// スキャン時刻までの差分は build_prior() が持続予測で埋める。
+		void on_prior(const msg::BeliefArray& message) {
+			const auto matched = from_belief_msg(
+				message,
+				std::span<const std::string>{this->names},
+				std::span<Belief>{this->external_prior}
+			);
+			if (matched == 0) {
+				RCLCPP_WARN_THROTTLE(
+					this->node.get_logger(),
+					*this->node.get_clock(),
+					5000,
+					"prior_beliefs matched no object by name. check the publisher."
+				);
+				return;
+			}
+			this->external_prior_stamp = rclcpp::Time{message.header.stamp};
+			this->has_external_prior = true;
+		}
+
+		/// このスキャンに対する事前分布を作る。
+		///
+		/// 内蔵の持続予測は「平均そのまま、不確かさだけ増やす」。
+		/// 外部の事前があれば、その時刻からスキャン時刻までの差分だけ
+		/// 同じ持続予測で前進させてから使う (外部はスキャン周期を知らなくてよい)。
+		/// 戻り値が false ならこのスキャンは捨てる。
+		auto build_prior(const rclcpp::Time& stamp, std::vector<Belief>& prior) -> bool {
+			const bool want_external = this->prior_source != "internal";
+			bool used_external = false;
+
+			if (want_external && this->has_external_prior) {
+				const auto age = (stamp - this->external_prior_stamp).seconds();
+				if (age >= 0.0 && age <= this->prior_timeout) {
+					prior = this->external_prior;
+					// 外部の時刻からスキャン時刻までを埋める
+					for (auto& belief : prior) {
+						belief.information = propagate(
+							belief.information,
+							this->process_noise,
+							static_cast<float>(age)
+						);
+					}
+					used_external = true;
+				} else {
+					RCLCPP_WARN_THROTTLE(
+						this->node.get_logger(),
+						*this->node.get_clock(),
+						5000,
+						"external prior is %.3f s old (timeout %.3f s).",
+						age,
+						this->prior_timeout
+					);
+				}
+			} else if (want_external) {
+				RCLCPP_WARN_THROTTLE(
+					this->node.get_logger(),
+					*this->node.get_clock(),
+					5000,
+					"no external prior received yet."
+				);
+			}
+
+			if (!used_external) {
+				if (this->prior_source == "external") { return false; }
+
+				// 内蔵の持続予測
+				const float dt = this->has_last_scan
+					? static_cast<float>((stamp - this->last_scan_stamp).seconds())
+					: 0.f;
+				prior = this->beliefs;
+				for (auto& belief : prior) {
+					belief.information =
+						propagate(belief.information, this->process_noise, dt);
+				}
+			}
+
 			return true;
 		}
 
@@ -313,7 +441,16 @@ namespace sotoba_ros {
 
 			if (!this->ensure_engine(this->points.size())) { return; }
 
-			// 親を持つオブジェクトのシードの作り直しは IcpEngine::run() 側でやる。
+			const rclcpp::Time stamp{scan.header.stamp};
+			std::vector<Belief> prior{};
+			if (!this->build_prior(stamp, prior)) { return; }
+
+			// 事前の平均をICPのシードにする。
+			// (情報行列そのものを solve に入れるのは sotoba 側の対応待ち)
+			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
+				this->engine->set_pose(iobj, prior[iobj].mean);
+			}
+
 			const auto run_status = this->engine->run(std::span{this->points}, this->icp_params);
 			if (run_status != RunStatus::ok) {
 				RCLCPP_ERROR_THROTTLE(
@@ -326,7 +463,29 @@ namespace sotoba_ros {
 				return;
 			}
 
+			this->update_beliefs(prior);
+			this->last_scan_stamp = stamp;
+			this->has_last_scan = true;
+			this->has_external_prior = false;
+
 			this->publish(scan);
+		}
+
+		/// 事後 = 事前 + 観測。
+		///
+		/// 平均は ICP の出力をそのまま使う (現状のICPは事前を解に入れていないので、
+		/// 厳密にはMAPでなく最尤推定)。情報行列は事前と観測の和。
+		void update_beliefs(const std::vector<Belief>& prior) {
+			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
+				this->beliefs[iobj].mean = this->engine->pose(iobj);
+				if (this->engine->status(iobj) == ObjectStatus::updated) {
+					this->beliefs[iobj].information =
+						fuse(prior[iobj].information, this->engine->observation_information(iobj));
+				} else {
+					// 観測が無かったので事前のまま
+					this->beliefs[iobj].information = prior[iobj].information;
+				}
+			}
 		}
 
 		void publish(const sensor_msgs::msg::LaserScan& scan) {
@@ -361,6 +520,7 @@ namespace sotoba_ros {
 					if (this->reset_after_failures != 0
 						&& this->failure_counts[iobj] >= this->reset_after_failures) {
 						this->engine->reset_pose(iobj);
+						this->beliefs[iobj] = Belief{this->objects[iobj].initial_pose, {}};
 						poses.back() = this->engine->pose(iobj);
 						this->failure_counts[iobj] = 0;
 						RCLCPP_WARN(
@@ -384,6 +544,21 @@ namespace sotoba_ros {
 			}
 
 			if (!array.poses.empty()) { this->pose_array_pub->publish(array); }
+
+			// 信念分布は全オブジェクトぶん出す (更新できなかったものも含む)。
+			// 外部の予測ノードはこれを見て次の事前を作る。
+			std::vector<std::uint8_t> status{};
+			status.reserve(this->objects.size());
+			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
+				status.emplace_back(static_cast<std::uint8_t>(this->engine->status(iobj)));
+			}
+			this->posterior_pub->publish(to_belief_msg(
+				std::span<const std::string>{this->names},
+				std::span<const Belief>{this->beliefs},
+				scan.header.stamp,
+				scan.header.frame_id,
+				std::span<const std::uint8_t>{status}
+			));
 
 			if (this->marker_pub) {
 				this->marker_pub->publish(build_object_markers(
