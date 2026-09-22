@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <utility>
 
 namespace sotoba_ros {
@@ -31,9 +32,19 @@ namespace sotoba_ros {
 		/// ICPが欲しいのは「フィールドローカル -> LiDAR座標系」なので、
 		/// 「LiDAR -> フィールド」を作って逆を取る。
 		auto robot_pose_to_object_pose(const ObjectsConfig& config) -> SE3 {
-			const auto lidar_in_field =
+			auto lidar_in_field =
 				SE3::trans(Vec3{config.start_x, config.start_y, config.lidar_height})
 				* SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, config.start_yaw}));
+
+			// Z軸が床を向いている場合は、x軸まわりに180度回す。
+			// x軸 (正面) はそのままで、y と z が反転する。
+			if (config.lidar_upside_down) {
+				lidar_in_field = lidar_in_field
+					* SE3::rot(sotoba::math::quaternion::ypr(
+						Vec3{std::numbers::pi_v<float>, 0.f, 0.f}
+					));
+			}
+
 			return lidar_in_field.inv();
 		}
 

@@ -100,8 +100,11 @@ ros2 launch sotoba_ros sotoba_node.launch.py predictor:=true rviz:=true
 両方合わせること。ノーツ (0.15m) も同様で、`lidar_height` が 0.15m 以上だと見えない。
 起動時にこの2つは検算していて、危ない設定ならログにエラー/警告を出す。
 
-**初期姿勢。** `start_x` / `start_y` / `start_yaw` はICPの初期シードなので、
-実際の置き場所と 0.1m 程度以内で合わせること。外れると収束しない。
+**初期姿勢。** `start_x` / `start_y` / `start_yaw` / `lidar_upside_down` はICPの
+初期シードなので、実際の置き場所と 0.1m 程度以内で合わせること。
+既定の初期位置で横に 0.20m ずらして試したところ、収束しないどころか
+対応点ゼロのまま発散した (0.05m なら誤差 0.0000m で復帰する)。
+`reset_after_failures` を有効にしておくと初期姿勢に戻れる。
 
 いずれも `config/sotoba_node.yaml` のパラメータなので、再ビルドは要らない。
 
@@ -301,7 +304,16 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
   効くようなら、支柱を細い箱で並べる形に置き換えること。
 - 全ての箱で**天板と底面を無効化**している。2D LiDAR の点は走査面上にしか無いので、
   面外法線を持つ面は誤対応の元にしかならない。
-- 初期姿勢は `missions.start_to_bingo_left` の start (-2.419, 1.354) / yaw 0。
+- **座標系の原点はフィールド中心の床面** (JSON: `coordinate_system.origin = field_centre_floor`)。
+  +x がスタート→ビンゴ、+y が左、+z が上。
+- 初期姿勢の既定値は「棚から2つ目のスラローム壁 (x=+0.021) の延長線上、
+  センターライン壁までの隙間 (y: 0.0165..0.8715) の中央」= (0.021, 0.444) で、
+  その壁を正面 (+y, yaw = pi/2) に向けた姿勢。`lidar_upside_down: true` なので
+  LiDAR のZ軸は床を向く (x軸まわり180度)。
+  -y 側の半面なら `start_y` と `start_yaw` の符号を反転させる。
+  JSONのミッション `start_to_bingo_left` は (-2.419, 1.354, yaw 0)。
+- **この初期位置からはノーツが1個も見えない** (スラロームの中で壁に囲まれている)。
+  ノーツを取りたいならノーツゾーンが見える位置まで動く必要がある。
 
 ### 実機に合わせて要確認
 
