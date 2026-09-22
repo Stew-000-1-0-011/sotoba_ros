@@ -13,7 +13,7 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 | ファイル | 役割 |
 | --- | --- |
 | `include/sotoba_ros/objects.hpp` | オブジェクトの型 (`Surface`, `ObjectDef`) と `make_objects()` の宣言 |
-| `src/objects.cpp` | **オブジェクトの実体。ここを書き換えて使う** |
+| `src/objects.cpp` | **オブジェクトの実体。ここを書き換えて使う** (現在は千葉大ロボコン2026フィールド) |
 | `include/sotoba_ros/icp_engine.hpp` | ICPラッパのインタフェース。sotobaのICPヘッダは出てこない (pimpl) |
 | `src/icp_engine.cpp` | sotobaのICPテンプレートを実体化する唯一のTU |
 | `include/sotoba_ros/markers.hpp` | 形状を RViz2 の Marker にする関数の宣言 |
@@ -22,7 +22,8 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 | `src/sotoba_node_impl.cpp` | ノードの実装 (ROSの入出力とパラメータ) |
 | `src/sotoba_node.cpp` | `main()`。`make_objects()` の結果をノードへ渡す |
 | `test/icp_smoke_test.cpp` | 合成スキャンでICPの収束を確認するスモークテスト (ROS不要) |
-| `test/scan_sim.py` | 合成スキャンを `/scan` へ流してノードごと確認する手動テスト |
+| `test/fake_scan_publisher.cpp` | `objects.cpp` の形状から合成 `/scan` と真値姿勢を流すノード |
+| `test/check_poses.py` | 真値と推定を突き合わせる手動テスト |
 
 ### コンパイルの分割
 
@@ -99,24 +100,29 @@ colcon test --packages-select sotoba_ros
 colcon test-result --verbose
 ```
 
-`objects.cpp` を書き換えたら、このテストの `truth` も合わせて直すこと。
+どちらもオブジェクト定義には依存しないので、`objects.cpp` を書き換えても
+そのまま使える (初期姿勢を少しずらしたものを真値にする)。
 
-ノードごと動かす手動テストも入れてある (`test/scan_sim.py`)。
-フィールド内の既知の姿勢から見た2Dスキャンを `/scan` へ流し、
-publish された Pose からロボット姿勢を復元して真値と比べる。
+ノードごと動かす手動テストも入れてある。`fake_scan_publisher` が
+`objects.cpp` の形状から合成スキャンを作って `/scan` へ流し、置いた真値の姿勢を
+`~/truth_poses` にも出すので、`check_poses.py` がそれと推定を突き合わせる。
 
 ```bash
-ros2 run sotoba_ros sotoba_node   # 別端末で
-python3 test/scan_sim.py
+ros2 launch sotoba_ros sotoba_node.launch.py fake_scan:=true
+python3 test/check_poses.py   # 別端末で
 ```
+
+`fake_scan_publisher` は `objects.cpp` にしか依存しないので、
+フィールド定義を書き換えてもそのまま使える。ずらし量 (`shift_x` / `shift_y` /
+`shift_yaw`)、光線数、距離ノイズはパラメータで変えられる。
 
 ### 動作確認済みの環境
 
 - ROS 2 Lyrical Luth (Ubuntu 26.04, GCC 15.2) のコンテナで
   `colcon build` / `colcon test` / 上記の手動テストが通ることを確認済み。
-  手動テストでのロボット姿勢の復元誤差は 0.000 m / 0.000 rad だった。
-- 手動テストは Marker の中身も検証する (フィールドの枠線32点が全て壁の上に乗るか、
-  円柱Markerの位置とスケールが合っているか)。
+  ロボコン2026フィールドで、初期姿勢から (0.10, -0.06) m / 0.03 rad ずらした真値に対し、
+  スモークテストの位置誤差 0.0001 m、ノードごとの手動テストで 0.003 m / 0.000 rad
+  (残差はほぼ観測できないz方向)。
 - RViz2 (Xvfb上のヘッドレス) で実際に表示されることも確認済み。上のスクリーンショットがそれ。
 
 ## RViz2 で見る
@@ -125,7 +131,10 @@ python3 test/scan_sim.py
 バンドルした設定で RViz2 ごと起動できる。
 
 ```bash
+# 実機のLiDARがあるとき
 ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
+# 手元で動きだけ見たいとき (合成スキャンを一緒に流す)
+ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
 ```
 
 (`rviz:=true` は rviz2 が入っている前提。package.xml には入れていないので、
@@ -133,9 +142,9 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
 
 ![RViz2 表示例](docs/rviz.png)
 
-上の画像は `test/scan_sim.py` の合成スキャンを流したもの。
-緑の枠線が推定姿勢に置いたフィールドの壁 (天井と床は無効にしてあるので4枚)、
-その上に乗っている白い点が `/scan`、中央左の円柱がポール、
+上の画像は `fake_scan_publisher` の合成スキャンを流したもの。
+緑の枠線が推定姿勢に置いたロボコン2026フィールドの壁 (外周・センターライン・
+各バッフル・ビンゴ棚)、その上に乗っている白い点が `/scan`、
 赤緑青の軸が `~/object_poses` の姿勢。
 
 - 形状は**推定姿勢に置いた状態**で描かれる。スキャンの点と枠線がズレていたら、
@@ -164,6 +173,39 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
 - `sigma_range` / `sigma_angle` / `huber_k`: 外れ値が多いときに効かせる。0で無効。
 - `reset_after_failures`: 連続失敗が続いたら `initial_pose` に戻す。0で無効。
 - `publish_markers` ほか `marker_*`: RViz2 表示用。上の節を参照。
+
+## 現在のオブジェクト定義 (千葉大ロボコン2026)
+
+`src/objects.cpp` の中身は
+[YUKICHI6105/lio_localization_sim](https://github.com/YUKICHI6105/lio_localization_sim)
+の `config/robocon2026_field.json` (branch `feature/eval-fidelity`, schema_version 1)
+を写したもの。座標系もJSONと同じで、原点はフィールド中心の床面、
++x がスタート→ビンゴ方向、+y が左、+z が上。
+
+- **外周壁** (`start_end` / `bingo_end` / `left_side` / `right_side`) は
+  ロボットが内側にいるので `BoxInner` 1個にまとめてある。
+  JSONの座標は壁の芯なので、内側の面は半厚 (0.0165m) ぶん内側。
+- **内側の壁** 12本 (センターライン、各バッフル、ノーツ/スラローム境界、
+  ゴール/スラローム境界、ビンゴ棚裏) は、厚み 0.033m・高さ 0.3m の
+  `BoxOuter` としてJSONの線分から作っている。どちら側からも見えるので `BoxOuter`。
+- **ビンゴ棚** は中実の箱として近似 (実際は格子)。走査面の高さで格子の隙間が
+  効くようなら、支柱を細い箱で並べる形に置き換えること。
+- 全ての箱で**天板と底面を無効化**している。2D LiDAR の点は走査面上にしか無いので、
+  面外法線を持つ面は誤対応の元にしかならない。
+- 初期姿勢は `missions.start_to_bingo_left` の start (-2.419, 1.354) / yaw 0。
+
+### 実機に合わせて要確認
+
+- `lidar_height` (既定 0.14m) は**必ず実機に合わせること**。
+  ここがズレると壁の当たり方が変わる。
+- 壁の高さはJSON側で 0.3m に暫定的に上げてある (規定値は 0.1m)。
+  LiDARの取付高が決まってJSONが戻ったら、こちらも戻すこと。
+- 壁の厚みはJSONに「terminology は 0.033、section 3.2 は 0.038」という食い違いのメモあり。
+- `baffle_left_2` / `baffle_right_2` はJSON側で「ver0731の図面と未照合」扱い。
+- **ノーツ (0.15m 角) はモデル化していない**。走査面 (0.14m) にぎりぎり掛かるが、
+  試合中に動くのでフィールドと同じ剛体には入れられず、個別オブジェクトにしても
+  1個あたり数点しか当たらない。外れ値として `huber_k` で殴るのが現実的。
+  個別に追いたい場合の書き方は `objects.cpp` にコメントで置いてある。
 
 ## オブジェクトの書き方
 

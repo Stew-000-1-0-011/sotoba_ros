@@ -26,7 +26,7 @@ Visualization Manager:
       Y: 0
       Z: 0
     Plane: XY
-    Plane Cell Count: 20
+    Plane Cell Count: 12
     Reference Frame: <Fixed Frame>
     Value: true
   - Alpha: 1
@@ -119,14 +119,14 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 20
+      Distance: 9.0
       Focal Point:
-        X: 0.0
-        Y: 0.0
+        X: 2.4
+        Y: -1.3
         Z: 0.0
       Name: Current View
       Near Clip Distance: 0.01
-      Pitch: 1.25
+      Pitch: 1.2
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
       Yaw: 3.14

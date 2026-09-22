@@ -1,9 +1,13 @@
 /// @file icp_smoke_test.cpp
 /// ROSに依存しないスモークテスト。
 ///
-/// objects.cpp のオブジェクト群を真値の姿勢に置き、2D LiDAR を模したレイキャストで
-/// 合成スキャンを作り、初期姿勢をシードにしたICPが真値へ戻るかを確認する。
-/// オブジェクト定義を書き換えたら、このテストの truth もそれに合わせること。
+/// objects.cpp のオブジェクト群を初期姿勢から少しずらした「真の姿勢」に置き、
+/// 2D LiDAR を模したレイキャストで合成スキャンを作って、
+/// 初期姿勢をシードにしたICPが真値へ戻るかを確認する。
+///
+/// オブジェクト定義には依存しないので、objects.cpp を書き換えてもそのまま使える。
+/// 収束しなくなったら、それは形状かシードか (あるいは下のずらし量が
+/// そのオブジェクトには大きすぎるか) の問題。
 
 #include <cmath>
 #include <cstdio>
@@ -22,9 +26,14 @@ namespace {
 
 	constexpr int ray_num = 720;
 	/// 位置の許容誤差 [m]
-	constexpr float position_tolerance = 0.05f;
+	constexpr float position_tolerance = 0.03f;
+	/// 初期姿勢からのずらし量。センサ座標系での平面運動。
+	constexpr float shift_x = 0.10f;
+	constexpr float shift_y = -0.06f;
+	constexpr float shift_yaw = 0.03f; // [rad]
 
 	/// 真の姿勢で全オブジェクトへレイキャストし、センサ座標系の点群を作る。
+	/// 走査面はセンサ座標系の z = 0 平面。
 	auto simulate_scan(std::span<const ObjectDef> objects, std::span<const SE3> truth)
 		-> std::vector<Vec3> {
 		std::vector<Vec3> points{};
@@ -60,35 +69,30 @@ namespace {
 
 auto main() -> int {
 	const auto objects = make_objects();
-	if (objects.size() < 2) {
-		std::fprintf(stderr, "this test assumes the default objects.cpp (field + pole).\n");
+	if (objects.empty()) {
+		std::fprintf(stderr, "make_objects() returned nothing.\n");
 		return 1;
 	}
 
-	// 初期姿勢からずらした真値。
-	// field: 並進 (0.4, -0.2) + yaw 5deg、pole: 横に 0.08m。
-	// pole を視線方向へずらさないのは、円柱の可視判定で対応点が消えるのを避けるため。
+	// 初期姿勢を少しずらしたものを真値とする。
+	const auto shift = SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, shift_yaw}))
+		* SE3::trans(Vec3{shift_x, shift_y, 0.f});
 	std::vector<SE3> truth{};
-	truth.emplace_back(
-		SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, 0.087f}))
-		* SE3::trans(Vec3{0.4f, -0.2f, 0.f}) * objects[0].initial_pose
-	);
-	truth.emplace_back(SE3::trans(Vec3{0.f, 0.08f, 0.f}) * objects[1].initial_pose);
-	for (std::size_t iobj = 2; iobj < objects.size(); ++iobj) {
-		truth.emplace_back(objects[iobj].initial_pose);
-	}
+	truth.reserve(objects.size());
+	for (const auto& object : objects) { truth.emplace_back(shift * object.initial_pose); }
 
 	const auto points = simulate_scan(std::span{objects}, std::span{truth});
 	if (points.size() < IcpEngine::min_correspondences()) {
 		std::fprintf(stderr, "simulated scan has too few points: %zu\n", points.size());
 		return 1;
 	}
+	std::printf("simulated scan: %zu points\n", points.size());
 
 	IcpEngine engine{std::span<const ObjectDef>{objects}, points.size()};
 	IcpParams params{};
 	params.max_loop_num = 30;
-	params.accept_distance = 0.5f;
-	params.accept_distance_begin = 1.5f;
+	params.accept_distance = 0.2f;
+	params.accept_distance_begin = 0.8f;
 	params.tikhonov = {1.f, 1.f, 0.01f, 0.f, 0.f, 1.f};
 
 	if (const auto status = engine.run(std::span{points}, params); status != RunStatus::ok) {
