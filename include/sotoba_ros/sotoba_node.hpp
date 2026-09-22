@@ -10,6 +10,7 @@
 /// ICPの実体 (テンプレート展開) は IcpEngine の pimpl の向こうにあるので、
 /// このヘッダをインクルードしても sotoba の ICP ヘッダは引きずられない。
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -34,10 +35,25 @@ namespace sotoba_ros {
 	/// - `max_loop_num`, `accept_distance`, `accept_distance_begin`,
 	///   `convergence_delta`, `tikhonov` (6要素), `sigma_range`, `sigma_angle`, `huber_k`
 	/// - `reset_after_failures`  : 連続失敗がこの回数を超えたら初期姿勢に戻す (0で無効)
+	/// - `prior_source` ほか      : 事前分布の出どころ (README参照)
+	/// - `publish_tf`, `tf_parent_frame`, `tf_object`, `tf_child_frame`
+	///                            : 推定した姿勢をTFにも流す
 	class SotobaNode final : public rclcpp::Node {
 	public:
-		/// @param objects 推定対象のオブジェクト群。空ならICPは走らず警告を出し続ける。
+		/// オブジェクト群を作る関数。ノード自身が渡されるので、
+		/// ROSパラメータを読んでから寸法や初期姿勢を決められる
+		/// (`make_objects(ObjectsConfig)` を呼ぶ想定)。
+		using ObjectFactory = std::function<std::vector<ObjectDef>(rclcpp::Node&)>;
+
+		/// @param factory オブジェクト群を作る関数。ノード構築後に1度だけ呼ばれる。
 		/// @param options 通常の rclcpp::NodeOptions。
+		explicit SotobaNode(
+			ObjectFactory factory,
+			const rclcpp::NodeOptions& options = rclcpp::NodeOptions{}
+		);
+
+		/// パラメータを使わない場合のための簡易版。
+		/// @param objects 推定対象のオブジェクト群。空ならICPは走らず警告を出し続ける。
 		explicit SotobaNode(
 			std::vector<ObjectDef> objects,
 			const rclcpp::NodeOptions& options = rclcpp::NodeOptions{}

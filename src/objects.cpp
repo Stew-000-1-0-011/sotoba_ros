@@ -22,39 +22,18 @@ namespace sotoba_ros {
 	namespace {
 		// --- robocon2026_field.json より ---
 
-		/// 壁の厚み [m] (JSON: walls.thickness)。
-		/// JSONに "terminology は 0.033、section 3.2 は 0.038" という食い違いのメモあり。
-		constexpr float wall_thickness = 0.033f;
-
-		/// 壁の高さ [m] (JSON: walls.height)。
-		/// 規定値は 0.100 (walls.height_rule_value) だが、LiDAR の走査面より低いと
-		/// 何も見えないので、JSON側で暫定的に 0.3 に上げてある。
-		/// 実機のLiDAR取付高が決まったら、こちらもJSONに合わせて戻すこと。
-		constexpr float wall_height = 0.3f;
-
 		/// 外周壁の芯の位置 [m] (JSON: walls.segments の start_end / bingo_end / *_side)
 		constexpr float outer_wall_x = 2.8025f;
 		constexpr float outer_wall_y = 1.6715f;
-
-		/// LiDAR の取付高 [m]。走査面がフィールド床から何mにあるか。
-		/// JSON の height_note が言っている「0.14 m の走査面」に合わせてある。
-		/// **実機に合わせて必ず直すこと**。ここがズレると、壁の上端や床との
-		/// 当たり方が変わって推定に効く。
-		constexpr float lidar_height = 0.14f;
-
-		/// ロボットの初期位置 [m] と向き [rad]。
-		/// JSON: missions.start_to_bingo_left の start / yaw。
-		constexpr float start_x = -2.419f;
-		constexpr float start_y = 1.354f;
-		constexpr float start_yaw = 0.f;
 
 		/// ロボット姿勢 (フィールド座標系) -> ICPに渡すオブジェクト姿勢。
 		///
 		/// ICPが欲しいのは「フィールドローカル -> LiDAR座標系」なので、
 		/// 「LiDAR -> フィールド」を作って逆を取る。
-		auto robot_pose_to_object_pose(const float x, const float y, const float yaw) -> SE3 {
-			const auto lidar_in_field = SE3::trans(Vec3{x, y, lidar_height})
-				* SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, yaw}));
+		auto robot_pose_to_object_pose(const ObjectsConfig& config) -> SE3 {
+			const auto lidar_in_field =
+				SE3::trans(Vec3{config.start_x, config.start_y, config.lidar_height})
+				* SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, config.start_yaw}));
 			return lidar_in_field.inv();
 		}
 
@@ -68,8 +47,8 @@ namespace sotoba_ros {
 			const float y1,
 			const float x2,
 			const float y2,
-			const float thickness = wall_thickness,
-			const float height = wall_height
+			const float thickness,
+			const float height
 		) -> Surface {
 			const float dx = x2 - x1;
 			const float dy = y2 - y1;
@@ -102,13 +81,9 @@ namespace sotoba_ros {
 		}
 
 		/// ノーツ (JSON: rules.note_size, notes.blue / notes.orange)
+		/// 注意: lidar_height >= note_size だとノーツには1本も当たらない
+		/// (sotoba_node が起動時に警告する)。
 		constexpr float note_size = 0.15f;
-
-		/// LiDAR の走査面がノーツより上を通ると、ノーツには1本も当たらない。
-		static_assert(
-			lidar_height < note_size,
-			"lidar_height must be below note_size, otherwise notes are invisible to the scan"
-		);
 
 		/// ノーツ1個。床に置かれた立方体。
 		///
@@ -119,7 +94,12 @@ namespace sotoba_ros {
 		/// 2スキャン目以降、ノーツをフィールドに追従させる (ロボットが動いても
 		/// 見失わないようにする) のは事前予測の仕事で、
 		/// field_note_predictor ノードがやる。
-		auto make_note(const char* const name, const float x, const float y) -> ObjectDef {
+		auto make_note(
+			const ObjectsConfig& config,
+			const char* const name,
+			const float x,
+			const float y
+		) -> ObjectDef {
 			std::vector<Surface> surfaces{};
 			surfaces.emplace_back(sotoba::surface::BoxOuter(
 				Vec3{0.f, 0.f, 0.5f * note_size},
@@ -132,13 +112,16 @@ namespace sotoba_ros {
 			return ObjectDef{
 				.name = name,
 				.surfaces = std::move(surfaces),
-				.initial_pose = robot_pose_to_object_pose(start_x, start_y, start_yaw)
-					* SE3::trans(Vec3{x, y, 0.f}),
+				.initial_pose = robot_pose_to_object_pose(config) * SE3::trans(Vec3{x, y, 0.f}),
 			};
 		}
 
 		/// フィールド全体。壁もビンゴ棚も一緒に動く剛体なので1オブジェクトにまとめる。
-		auto make_field() -> ObjectDef {
+		auto make_field(const ObjectsConfig& config) -> ObjectDef {
+			const auto wall = [&](const float x1, const float y1, const float x2, const float y2) {
+				return wall_segment(x1, y1, x2, y2, config.wall_thickness, config.wall_height);
+			};
+
 			std::vector<Surface> surfaces{};
 			surfaces.reserve(16);
 
@@ -146,12 +129,12 @@ namespace sotoba_ros {
 			// ロボットは内側にいるので、4枚まとめて BoxInner 1個で表す。
 			// JSONの座標は芯なので、内側の面は半厚ぶん内側。
 			surfaces.emplace_back(sotoba::surface::BoxInner(
-				Vec3{0.f, 0.f, 0.5f * wall_height},
+				Vec3{0.f, 0.f, 0.5f * config.wall_height},
 				SquareMat<3>::ide(),
 				Vec3{
-					outer_wall_x - 0.5f * wall_thickness,
-					outer_wall_y - 0.5f * wall_thickness,
-					0.5f * wall_height
+					outer_wall_x - 0.5f * config.wall_thickness,
+					outer_wall_y - 0.5f * config.wall_thickness,
+					0.5f * config.wall_height
 				},
 				// 天井と床は無い。2D LiDAR の点は走査面上にしか無いので、
 				// 面外法線を持つ面を残すと誤対応でz方向に引っ張られるだけ。
@@ -160,24 +143,24 @@ namespace sotoba_ros {
 
 			// --- 内側の壁 (JSON: walls.segments のうち外周以外) ---
 			// センターライン
-			surfaces.emplace_back(wall_segment(-2.8025f, 0.0f, 1.5625f, 0.0f));
+			surfaces.emplace_back(wall(-2.8025f, 0.0f, 1.5625f, 0.0f));
 			// スラローム入口のバッフル
-			surfaces.emplace_back(wall_segment(-0.821f, 0.8f, -0.821f, 1.6715f));
-			surfaces.emplace_back(wall_segment(-0.821f, -1.6715f, -0.821f, -0.8f));
+			surfaces.emplace_back(wall(-0.821f, 0.8f, -0.821f, 1.6715f));
+			surfaces.emplace_back(wall(-0.821f, -1.6715f, -0.821f, -0.8f));
 			// ノーツ/スタートゾーンとスラロームの境界
-			surfaces.emplace_back(wall_segment(-1.579f, 1.069f, -1.579f, 1.669f));
-			surfaces.emplace_back(wall_segment(-1.579f, -1.669f, -1.579f, -1.069f));
-			surfaces.emplace_back(wall_segment(-1.579f, 0.0165f, -1.579f, 0.2665f));
-			surfaces.emplace_back(wall_segment(-1.579f, -0.2665f, -1.579f, -0.0165f));
+			surfaces.emplace_back(wall(-1.579f, 1.069f, -1.579f, 1.669f));
+			surfaces.emplace_back(wall(-1.579f, -1.669f, -1.579f, -1.069f));
+			surfaces.emplace_back(wall(-1.579f, 0.0165f, -1.579f, 0.2665f));
+			surfaces.emplace_back(wall(-1.579f, -0.2665f, -1.579f, -0.0165f));
 			// スラローム中央のバッフル
 			// (JSONに「ver0731の図面と未照合」という注記あり。実機と違ったらここを直す)
-			surfaces.emplace_back(wall_segment(0.021f, 0.019f, 0.021f, 0.819f));
-			surfaces.emplace_back(wall_segment(0.021f, -0.819f, 0.021f, -0.019f));
+			surfaces.emplace_back(wall(0.021f, 0.019f, 0.021f, 0.819f));
+			surfaces.emplace_back(wall(0.021f, -0.819f, 0.021f, -0.019f));
 			// ゴール/スラロームの境界
-			surfaces.emplace_back(wall_segment(0.821f, 0.8f, 0.821f, 1.6715f));
-			surfaces.emplace_back(wall_segment(0.821f, -1.6715f, 0.821f, -0.8f));
+			surfaces.emplace_back(wall(0.821f, 0.8f, 0.821f, 1.6715f));
+			surfaces.emplace_back(wall(0.821f, -1.6715f, 0.821f, -0.8f));
 			// ビンゴ棚裏のセンターライン
-			surfaces.emplace_back(wall_segment(2.5025f, 0.0f, 2.8025f, 0.0f));
+			surfaces.emplace_back(wall(2.5025f, 0.0f, 2.8025f, 0.0f));
 
 			// --- ビンゴ棚 (JSON: bingo) ---
 			// 実際は格子状で隙間だらけだが、走査面の高さでは正面が塞がっている前提で
@@ -194,14 +177,16 @@ namespace sotoba_ros {
 			return ObjectDef{
 				.name = "field",
 				.surfaces = std::move(surfaces),
-				.initial_pose = robot_pose_to_object_pose(start_x, start_y, start_yaw),
+				.initial_pose = robot_pose_to_object_pose(config),
 			};
 		}
 	} // namespace
 
-	auto make_objects() -> std::vector<ObjectDef> {
+	auto make_objects(const ObjectsConfig& config) -> std::vector<ObjectDef> {
 		std::vector<ObjectDef> objects{};
-		objects.emplace_back(make_field());
+		objects.emplace_back(make_field(config));
+
+		if (!config.include_notes) { return objects; }
 
 		// ノーツ (JSON: notes.blue / notes.orange)。座標はフィールド座標系。
 		//
@@ -211,18 +196,18 @@ namespace sotoba_ros {
 		// - 面が1つしか見えないノーツは、その面に沿う方向とyawが観測できない
 		//   (正規方程式がランク落ちして solve_failed になり、publish されない)
 		// ので、全部が常に取れるとは思わないこと。詳しくはREADMEを参照。
-		objects.emplace_back(make_note("note_orange_0", -2.699f, 0.125f));
-		objects.emplace_back(make_note("note_orange_1", -2.499f, 0.125f));
-		objects.emplace_back(make_note("note_orange_2", -2.299f, 0.125f));
-		objects.emplace_back(make_note("note_orange_3", -2.099f, 0.125f));
-		objects.emplace_back(make_note("note_orange_4", -1.899f, 0.125f));
-		objects.emplace_back(make_note("note_orange_5", -1.699f, 0.125f));
-		objects.emplace_back(make_note("note_blue_0", -2.699f, -0.125f));
-		objects.emplace_back(make_note("note_blue_1", -2.499f, -0.125f));
-		objects.emplace_back(make_note("note_blue_2", -2.299f, -0.125f));
-		objects.emplace_back(make_note("note_blue_3", -2.099f, -0.125f));
-		objects.emplace_back(make_note("note_blue_4", -1.899f, -0.125f));
-		objects.emplace_back(make_note("note_blue_5", -1.699f, -0.125f));
+		objects.emplace_back(make_note(config, "note_orange_0", -2.699f, 0.125f));
+		objects.emplace_back(make_note(config, "note_orange_1", -2.499f, 0.125f));
+		objects.emplace_back(make_note(config, "note_orange_2", -2.299f, 0.125f));
+		objects.emplace_back(make_note(config, "note_orange_3", -2.099f, 0.125f));
+		objects.emplace_back(make_note(config, "note_orange_4", -1.899f, 0.125f));
+		objects.emplace_back(make_note(config, "note_orange_5", -1.699f, 0.125f));
+		objects.emplace_back(make_note(config, "note_blue_0", -2.699f, -0.125f));
+		objects.emplace_back(make_note(config, "note_blue_1", -2.499f, -0.125f));
+		objects.emplace_back(make_note(config, "note_blue_2", -2.299f, -0.125f));
+		objects.emplace_back(make_note(config, "note_blue_3", -2.099f, -0.125f));
+		objects.emplace_back(make_note(config, "note_blue_4", -1.899f, -0.125f));
+		objects.emplace_back(make_note(config, "note_blue_5", -1.699f, -0.125f));
 
 		return objects;
 	}

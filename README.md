@@ -70,11 +70,52 @@ colcon build --packages-select sotoba_ros \
 
 ## 実行
 
+### 実機
+
+最小構成は **LiDAR ドライバ + sotoba_node の2つだけ**。
+
 ```bash
-ros2 launch sotoba_ros sotoba_node.launch.py
-# or
-ros2 run sotoba_ros sotoba_node --ros-args --params-file config/sotoba_node.yaml
+# LiDAR (例: UST-10LX)
+ros2 launch urg_node2 urg_node2.launch.py
+
+# 推定。ノーツも追うなら predictor:=true、見たいなら rviz:=true
+ros2 launch sotoba_ros sotoba_node.launch.py predictor:=true rviz:=true
 ```
+
+| ノード | 要否 | 役割 |
+| --- | --- | --- |
+| LiDARドライバ | 必須 | `/scan` を出す |
+| `sotoba_node` | 必須 | 推定本体 |
+| `field_note_predictor` | ノーツを追うなら | 隠れたノーツをフィールドに追従させる |
+| `rviz2` | 確認用 | `rviz:=true` で一緒に起動 |
+
+`fake_scan:=true` は合成スキャンを流す検証用なので、実機では**付けないこと**
+(`/scan` が衝突する)。
+
+### 実機で動かす前に必ず確認すること
+
+**LiDAR の取付高と壁の高さ。** `lidar_height` (既定 0.14m) が `wall_height`
+以上だと走査面が壁の上を通るので**何も見えない**。元にしたJSONの壁高 0.3m は
+「LiDARの走査面より高くするための暫定値」で、**競技規定は 0.1m**。実物を測って
+両方合わせること。ノーツ (0.15m) も同様で、`lidar_height` が 0.15m 以上だと見えない。
+起動時にこの2つは検算していて、危ない設定ならログにエラー/警告を出す。
+
+**初期姿勢。** `start_x` / `start_y` / `start_yaw` はICPの初期シードなので、
+実際の置き場所と 0.1m 程度以内で合わせること。外れると収束しない。
+
+いずれも `config/sotoba_node.yaml` のパラメータなので、再ビルドは要らない。
+
+### 自己位置として使う (TF)
+
+`publish_tf: true` にすると、`tf_parent_frame` (既定 `field`) から
+LiDAR のフレームへの変換を publish する。これは推定した
+「フィールド→LiDAR」の逆、つまり**フィールド座標系でのLiDARの姿勢**。
+
+URDF 等で既に LiDAR のフレームに親がいる場合は、`tf_child_frame: base_link`
+のように指定する。その場合は `base_link -> スキャンのフレーム` をTFから引いて
+合成した上で publish するので、TFツリーが二重親にならない。
+
+これらは**起動時にしか読まない**ので、`ros2 param set` では切り替わらない。
 
 ### トピック
 

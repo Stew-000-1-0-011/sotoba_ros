@@ -50,9 +50,34 @@ namespace sotoba_ros {
 		SE3 initial_pose{SE3::ide()};
 	};
 
+	/// オブジェクトを組み立てるときの寸法・初期姿勢。
+	///
+	/// 実機に合わせて変える必要があるものを集めてある。
+	/// 既定値は robocon2026_field.json のもの。
+	/// sotoba_node / fake_scan_publisher はこれをROSパラメータから読む
+	/// (再ビルドせずに変えられる)。
+	struct ObjectsConfig final {
+		/// LiDAR の取付高 [m]。走査面がフィールド床から何mにあるか。
+		/// **実機に合わせて必ず直すこと**。
+		/// これが壁の高さ以上だと壁が1本も見えないし、
+		/// ノーツの1辺 (0.15m) 以上だとノーツも見えない。
+		float lidar_height{0.14f};
+		/// 壁の高さ [m]。JSONでは暫定的に 0.3 に上げてあるが、規定値は 0.1。
+		float wall_height{0.3f};
+		/// 壁の厚み [m] (JSON: walls.thickness)。
+		float wall_thickness{0.033f};
+		/// ロボットの初期位置 [m] と向き [rad] (フィールド座標系)。
+		/// ICPの初期シードになるので、実際の置き場所と 0.1m 程度以内で合わせること。
+		float start_x{-2.419f};
+		float start_y{1.354f};
+		float start_yaw{0.f};
+		/// ノーツを推定対象に含めるか。
+		bool include_notes{true};
+	};
+
 	/// 推定対象のオブジェクト群を作る。実装は src/objects.cpp。
 	///
 	/// 返り値の順序がそのままオブジェクトのインデックスになり、
 	/// 姿勢はこの順で publish される。オブジェクト数は255個まで (sotoba側の制限)。
-	auto make_objects() -> std::vector<ObjectDef>;
+	auto make_objects(const ObjectsConfig& config = {}) -> std::vector<ObjectDef>;
 } // namespace sotoba_ros

@@ -17,6 +17,8 @@
   <depend>geometry_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
   <depend>eigen</depend>
 
   <!-- sotoba は rosdep に無いので、find_package(sotoba) が通るよう

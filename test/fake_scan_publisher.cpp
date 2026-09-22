@@ -34,7 +34,30 @@ namespace {
 	class FakeScanPublisher final : public rclcpp::Node {
 	public:
 		FakeScanPublisher() : rclcpp::Node{"fake_scan_publisher"} {
-			this->objects_ = sotoba_ros::make_objects();
+			// sotoba_node と同じ寸法でシミュレーションする
+			const sotoba_ros::ObjectsConfig defaults{};
+			sotoba_ros::ObjectsConfig config{};
+			config.lidar_height = static_cast<float>(this->declare_parameter<double>(
+				"lidar_height",
+				static_cast<double>(defaults.lidar_height)
+			));
+			config.wall_height = static_cast<float>(this->declare_parameter<double>(
+				"wall_height",
+				static_cast<double>(defaults.wall_height)
+			));
+			config.start_x = static_cast<float>(
+				this->declare_parameter<double>("start_x", static_cast<double>(defaults.start_x))
+			);
+			config.start_y = static_cast<float>(
+				this->declare_parameter<double>("start_y", static_cast<double>(defaults.start_y))
+			);
+			config.start_yaw = static_cast<float>(this->declare_parameter<double>(
+				"start_yaw",
+				static_cast<double>(defaults.start_yaw)
+			));
+			config.include_notes =
+				this->declare_parameter<bool>("include_notes", defaults.include_notes);
+			this->objects_ = sotoba_ros::make_objects(config);
 
 			this->frame_id_ = this->declare_parameter<std::string>("frame_id", "laser");
 			this->ray_num_ = static_cast<std::size_t>(

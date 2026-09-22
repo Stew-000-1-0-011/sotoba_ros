@@ -22,6 +22,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(Eigen3 REQUIRED)
 
@@ -143,6 +145,8 @@ target_link_libraries(sotoba_ros_node
 		${sensor_msgs_TARGETS}
 		${geometry_msgs_TARGETS}
 		${visualization_msgs_TARGETS}
+		tf2::tf2
+		tf2_ros::tf2_ros
 )
 set_target_properties(sotoba_ros_node PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
