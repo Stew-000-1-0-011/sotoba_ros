@@ -68,9 +68,20 @@ namespace sotoba_ros {
 		float wall_thickness{0.033f};
 		/// ロボットの初期位置 [m] と向き [rad] (フィールド座標系)。
 		/// ICPの初期シードになるので、実際の置き場所と 0.1m 程度以内で合わせること。
-		float start_x{-2.419f};
-		float start_y{1.354f};
-		float start_yaw{0.f};
+		///
+		/// 既定値は「棚から2つ目のスラローム壁 (x=+0.021) の延長線上、
+		/// センターライン壁までの隙間 (y: 0.0165..0.8715) の中央」で、
+		/// その壁のほうを正面 (+y) に向けた姿勢。
+		/// -y 側の半面に置くなら start_y と start_yaw の符号を反転させる。
+		/// JSONのミッション start_to_bingo_left は (-2.419, 1.354, yaw 0)。
+		float start_x{0.021f};
+		float start_y{0.444f};
+		float start_yaw{1.5707963f}; // +y を向く (pi/2)
+		/// LiDAR のZ軸が床を向いている (上下逆さに取り付けてある) か。
+		///
+		/// true なら初期姿勢に x軸まわり180度の回転が入る。
+		/// ここを間違えると姿勢が180度ずれた状態から始まるので、ICPは収束しない。
+		bool lidar_upside_down{true};
 		/// ノーツを推定対象に含めるか。
 		bool include_notes{true};
 	};

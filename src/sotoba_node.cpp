@@ -46,6 +46,8 @@ namespace {
 		);
 		config.include_notes =
 			node.declare_parameter<bool>("include_notes", defaults.include_notes);
+		config.lidar_upside_down =
+			node.declare_parameter<bool>("lidar_upside_down", defaults.lidar_upside_down);
 
 		// 実機で一番やらかしやすいところなので、起動時に検算しておく。
 		if (config.lidar_height >= config.wall_height) {
@@ -68,12 +70,14 @@ namespace {
 
 		RCLCPP_INFO(
 			node.get_logger(),
-			"objects: lidar_height=%.3f wall_height=%.3f start=(%.3f, %.3f, %.3f rad) notes=%s",
+			"objects: lidar_height=%.3f wall_height=%.3f start=(%.3f, %.3f, %.3f rad) "
+			"upside_down=%s notes=%s",
 			static_cast<double>(config.lidar_height),
 			static_cast<double>(config.wall_height),
 			static_cast<double>(config.start_x),
 			static_cast<double>(config.start_y),
 			static_cast<double>(config.start_yaw),
+			config.lidar_upside_down ? "yes" : "no",
 			config.include_notes ? "yes" : "no"
 		);
 

@@ -57,6 +57,8 @@ namespace {
 			));
 			config.include_notes =
 				this->declare_parameter<bool>("include_notes", defaults.include_notes);
+			config.lidar_upside_down =
+				this->declare_parameter<bool>("lidar_upside_down", defaults.lidar_upside_down);
 			this->objects_ = sotoba_ros::make_objects(config);
 
 			this->frame_id_ = this->declare_parameter<std::string>("frame_id", "laser");
