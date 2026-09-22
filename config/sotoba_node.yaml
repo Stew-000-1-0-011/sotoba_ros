@@ -47,6 +47,15 @@
     # オブジェクト名をテキストで出すか
     marker_show_labels: true
 
+    # --- 事前分布 ---
+    # internal / external / external_or_internal
+    prior_source: "internal"
+    # 持続予測で1秒あたりに増やす不確かさ
+    process_noise_angular: 0.5  # [rad^2/s]
+    process_noise_linear: 0.5   # [m^2/s]
+    # 外部の事前がこれより古ければ内蔵にフォールバック [s]
+    prior_timeout: 0.5
+
     # --- 復帰処理 ---
     # 連続してこの回数だけ更新に失敗したら初期姿勢へ戻す (0で無効)
     reset_after_failures: 0

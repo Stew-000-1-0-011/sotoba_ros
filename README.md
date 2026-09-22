@@ -16,6 +16,9 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 | `src/objects.cpp` | **オブジェクトの実体。ここを書き換えて使う** (現在は千葉大ロボコン2026フィールド) |
 | `include/sotoba_ros/icp_engine.hpp` | ICPラッパのインタフェース。sotobaのICPヘッダは出てこない (pimpl) |
 | `src/icp_engine.cpp` | sotobaのICPテンプレートを実体化する唯一のTU |
+| `include/sotoba_ros/belief.hpp` | 信念分布 (平均 + 情報行列) と持続予測。ROS非依存 |
+| `msg/BeliefArray.msg` | 事前/事後をやりとりする契約。外部の予測ノードとの境界 |
+| `src/field_note_predictor.cpp` | 事前予測ノード (アプリ固有の例)。ノーツをフィールドに追従させる |
 | `include/sotoba_ros/markers.hpp` | 形状を RViz2 の Marker にする関数の宣言 |
 | `src/markers.cpp` | 形状 -> MarkerArray の変換 (ICPとは独立の別TU) |
 | `include/sotoba_ros/sotoba_node.hpp` | ノード `SotobaNode` の宣言。オブジェクト群はコンストラクタで受け取る |
@@ -81,6 +84,9 @@ ros2 run sotoba_ros sotoba_node --ros-args --params-file config/sotoba_node.yaml
 | pub | `~/objects/<name>/pose` | `geometry_msgs/msg/PoseStamped` |
 | pub | `~/object_poses` | `geometry_msgs/msg/PoseArray` |
 | pub | `~/object_markers` | `visualization_msgs/msg/MarkerArray` (RViz2用、transient local) |
+| pub | `~/posterior_beliefs` | `sotoba_ros/msg/BeliefArray` (全オブジェクト、名前と状態付き) |
+| pub | `~/initial_beliefs` | `sotoba_ros/msg/BeliefArray` (定義上の初期姿勢、transient local) |
+| sub | `~/prior_beliefs` | `sotoba_ros/msg/BeliefArray` (外部予測ノードから。`prior_source` 次第) |
 
 publish される姿勢は「オブジェクトローカル座標系をLiDAR座標系へ写す SE3」、
 すなわち **LiDARから見たオブジェクトの位置姿勢**。
@@ -113,8 +119,10 @@ python3 test/check_poses.py   # 別端末で
 ```
 
 `fake_scan_publisher` は `objects.cpp` にしか依存しないので、
-フィールド定義を書き換えてもそのまま使える。ずらし量 (`shift_x` / `shift_y` /
-`shift_yaw`)、光線数、距離ノイズはパラメータで変えられる。
+フィールド定義を書き換えてもそのまま使える。パラメータで
+起動時のずれ (`shift_*`)、**ロボットの運動** (`motion_amplitude` /
+`motion_yaw_amplitude` / `motion_period`)、光線数、距離ノイズを変えられる。
+運動を入れると、事前予測が効いているかどうかを確認できる。
 
 ### 動作確認済みの環境
 
@@ -124,6 +132,66 @@ python3 test/check_poses.py   # 別端末で
   スモークテストの位置誤差 0.0001 m、ノードごとの手動テストで 0.003 m / 0.000 rad
   (残差はほぼ観測できないz方向)。
 - RViz2 (Xvfb上のヘッドレス) で実際に表示されることも確認済み。上のスクリーンショットがそれ。
+
+## 事前分布 (シードの与え方)
+
+ICPは前スキャンの推定を次のシードにするが、**ロボットが動くとシードが置いていかれる**。
+特にノーツのような小さいオブジェクトは、自分のサイズぶん動かれると対応点を失うか、
+0.2m間隔で並ぶ隣のノーツを掴む。
+
+そこで sotoba_node は毎スキャン「事前分布」を作ってからICPを回す。
+
+- **内蔵の持続予測** (既定): 平均はそのまま、不確かさだけ増やす。
+  オブジェクト同士の関係は知らない
+- **外部ノード**: `~/prior_beliefs` で与える。オブジェクト同士の連動のような
+  アプリ固有の予測はこちら
+
+`prior_source` で切り替える。
+
+| 値 | 挙動 |
+| --- | --- |
+| `internal` (既定) | 内蔵の持続予測のみ。1ノードで完結する |
+| `external` | 外部のみ。事前が来なければそのスキャンを捨てる |
+| `external_or_internal` | 外部を優先し、無ければ内蔵で補う |
+
+外部の事前は `header.stamp` に「その信念が指す時刻」を入れる。
+スキャン時刻までの差分は sotoba_node が内蔵の持続予測で埋めるので、
+**送り手はスキャン周期を知らなくてよい**。`prior_timeout` より古ければ
+内蔵にフォールバックして警告する。
+
+### field_note_predictor
+
+同梱の事前予測ノード。「ノーツはフィールドに付いている」という関係を入れる:
+
+    ノーツの事前 = フィールドの推定姿勢 x (フィールドから見たノーツの姿勢)
+
+相対姿勢の初期値は `~/initial_beliefs` (objects.cpp の定義) から取り、
+推定が成功するたびに更新する (試合中に動かされてもついていける)。
+推定結果から初期値を作らないのは、最初のスキャンで誤対応したときに
+それを覚え込んでしまうため。
+
+```bash
+ros2 launch sotoba_ros sotoba_node.launch.py fake_scan:=true predictor:=true
+```
+
+`attachments` パラメータ (既定 `["note_*:field"]`) で親子を指定する。
+末尾のワイルドカード1個だけ対応。アプリが違えば書き換えるか、丸ごと差し替える。
+
+### 効果 (合成スキャンでの実測)
+
+ロボットを振幅1.2m/0.6rad・周期4sで動かしながら13オブジェクトを推定した結果:
+
+| | 内蔵のみ | + field_note_predictor |
+| --- | --- | --- |
+| 更新できた数 | 5 / 13 | 6 / 13 |
+| 誤った姿勢 | 0 | 0 |
+| 見えているノーツ | 追従する (誤差0.006m) | 追従する (誤差0.011m) |
+| **壁に隠れたノーツ** | **センサ座標系に取り残されてズレる (0.030m)** | **フィールドと同じ誤差で追従 (0.011m)** |
+
+見えているノーツはこの速度域なら内蔵だけでも追える。差が出るのは
+**隠れているオブジェクト**で、内蔵の持続予測は「センサ座標系で静止」と
+仮定するのでロボットが動くとズレていくが、予測ノードがあれば
+フィールドに付いたまま正しい位置に居続ける。
 
 ## RViz2 で見る
 

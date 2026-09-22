@@ -90,6 +90,9 @@ namespace sotoba_ros {
 		rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pose_array_pub{};
 		rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub{};
 		rclcpp::Publisher<msg::BeliefArray>::SharedPtr posterior_pub{};
+		/// objects.cpp の定義そのもの。外部の予測ノードが
+		/// 「オブジェクト同士の本来の位置関係」を知るために使う (transient local)。
+		rclcpp::Publisher<msg::BeliefArray>::SharedPtr initial_pub{};
 		rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub{};
 		rclcpp::Subscription<msg::BeliefArray>::SharedPtr prior_sub{};
 
@@ -247,6 +250,19 @@ namespace sotoba_ros {
 
 			this->posterior_pub =
 				n.create_publisher<msg::BeliefArray>("~/posterior_beliefs", rclcpp::QoS{10});
+
+			// 定義上の初期姿勢。後から起動したノードにも届くよう transient local。
+			this->initial_pub = n.create_publisher<msg::BeliefArray>(
+				"~/initial_beliefs",
+				rclcpp::QoS{1}.transient_local()
+			);
+			this->initial_pub->publish(to_belief_msg(
+				std::span<const std::string>{this->names},
+				std::span<const Belief>{this->beliefs},
+				n.get_clock()->now(),
+				"",
+				{}
+			));
 
 			if (this->publish_markers) {
 				// RViz2 を後から起動しても形状が見えるよう transient local にする。

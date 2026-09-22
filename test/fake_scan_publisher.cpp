@@ -55,18 +55,23 @@ namespace {
 			this->range_noise_ =
 				static_cast<float>(this->declare_parameter<double>("range_noise_stddev", 0.0));
 
-			// 初期姿勢からのずらし量 (センサ座標系での平面運動)。
-			// sotoba_node のシードは初期姿勢なので、これがICPの初期誤差になる。
-			const auto shift_x = static_cast<float>(this->declare_parameter<double>("shift_x", 0.1));
-			const auto shift_y =
-				static_cast<float>(this->declare_parameter<double>("shift_y", -0.06));
-			const auto shift_yaw =
-				static_cast<float>(this->declare_parameter<double>("shift_yaw", 0.03));
-			const auto shift = SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, shift_yaw}))
-				* SE3::trans(Vec3{shift_x, shift_y, 0.f});
-			for (const auto& object : this->objects_) {
-				this->truth_.emplace_back(shift * object.initial_pose);
-			}
+			// 起動時のずれ (センサ座標系での平面運動)。
+			// sotoba_node の初期シードは objects.cpp の初期姿勢なので、これが初期誤差になる。
+			this->shift_x_ = static_cast<float>(this->declare_parameter<double>("shift_x", 0.02));
+			this->shift_y_ =
+				static_cast<float>(this->declare_parameter<double>("shift_y", -0.012));
+			this->shift_yaw_ =
+				static_cast<float>(this->declare_parameter<double>("shift_yaw", 0.006));
+
+			// ロボットの運動。静止した世界をロボットが動きながら見るので、
+			// 全オブジェクトに同じセンサ座標系の変換がかかる。
+			// 0 なら静止 (起動時のずれだけ)。
+			this->motion_amplitude_ =
+				static_cast<float>(this->declare_parameter<double>("motion_amplitude", 0.0));
+			this->motion_yaw_amplitude_ =
+				static_cast<float>(this->declare_parameter<double>("motion_yaw_amplitude", 0.0));
+			this->motion_period_ =
+				static_cast<float>(this->declare_parameter<double>("motion_period", 6.0));
 
 			const auto hz = this->declare_parameter<double>("scan_hz", 10.0);
 
@@ -92,6 +97,36 @@ namespace {
 		}
 
 	private:
+		/// 時刻 t におけるロボットの運動 (センサ座標系での変換)。
+		auto motion(const float t) const -> SE3 {
+			if (!(this->motion_amplitude_ > 0.f) && !(this->motion_yaw_amplitude_ > 0.f)) {
+				return SE3::ide();
+			}
+			const float w = 2.f * std::numbers::pi_v<float> / std::max(0.1f, this->motion_period_);
+			return SE3::rot(sotoba::math::quaternion::ypr(
+					   Vec3{0.f, 0.f, this->motion_yaw_amplitude_ * std::sin(w * t)}
+				   ))
+				* SE3::trans(Vec3{
+					  this->motion_amplitude_ * std::sin(w * t),
+					  this->motion_amplitude_ * (1.f - std::cos(w * t)),
+					  0.f
+				  });
+		}
+
+		/// このスキャンでの真の姿勢を作り直す。
+		void update_truth(const float t) {
+			const auto shift =
+				SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, this->shift_yaw_}))
+				* SE3::trans(Vec3{this->shift_x_, this->shift_y_, 0.f});
+			const auto pose = this->motion(t) * shift;
+
+			this->truth_.clear();
+			this->truth_.reserve(this->objects_.size());
+			for (const auto& object : this->objects_) {
+				this->truth_.emplace_back(pose * object.initial_pose);
+			}
+		}
+
 		/// 真の姿勢に置いた全曲面へのレイキャスト。距離の二乗を返す。
 		auto cast(const UVec3& ray) const -> float {
 			float nearest2 = std::numeric_limits<float>::infinity();
@@ -112,6 +147,8 @@ namespace {
 
 		void tick() {
 			const auto stamp = this->now();
+			if (this->start_.nanoseconds() == 0) { this->start_ = stamp; }
+			this->update_truth(static_cast<float>((stamp - this->start_).seconds()));
 
 			sensor_msgs::msg::LaserScan scan{};
 			scan.header.stamp = stamp;
@@ -168,6 +205,13 @@ namespace {
 		float range_min_{};
 		float range_max_{};
 		float range_noise_{};
+		float shift_x_{};
+		float shift_y_{};
+		float shift_yaw_{};
+		float motion_amplitude_{};
+		float motion_yaw_amplitude_{};
+		float motion_period_{6.f};
+		rclcpp::Time start_{0, 0, RCL_ROS_TIME};
 		std::mt19937 rng_{0};
 
 		rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_{};
