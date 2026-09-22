@@ -144,21 +144,28 @@ namespace sotoba_ros {
 			// --- 内側の壁 (JSON: walls.segments のうち外周以外) ---
 			// センターライン
 			surfaces.emplace_back(wall(-2.8025f, 0.0f, 1.5625f, 0.0f));
-			// スラローム入口のバッフル
-			surfaces.emplace_back(wall(-0.821f, 0.8f, -0.821f, 1.6715f));
-			surfaces.emplace_back(wall(-0.821f, -1.6715f, -0.821f, -0.8f));
+			// --- スラロームの壁 3列 ---
+			// **JSONとは外壁/中央壁の付き方が反転している**。
+			// 実フィールドを確認したところ、JSON (robocon2026_field.json) の
+			// baffle_*_1 / baffle_*_2 / goal_slalom_boundary_* は
+			// 互い違いの位相が逆だった。長さは各列のものを保ったまま、
+			// 反対側の壁から生やしている。
+			// JSONを直したら、こちらもJSONどおりに戻すこと。
+			//
+			// 列1 (JSON: baffle_*_1, x=-0.821, 長さ0.8715): 中央壁(y=0)から生える
+			surfaces.emplace_back(wall(-0.821f, 0.019f, -0.821f, 0.8905f));
+			surfaces.emplace_back(wall(-0.821f, -0.8905f, -0.821f, -0.019f));
 			// ノーツ/スタートゾーンとスラロームの境界
 			surfaces.emplace_back(wall(-1.579f, 1.069f, -1.579f, 1.669f));
 			surfaces.emplace_back(wall(-1.579f, -1.669f, -1.579f, -1.069f));
 			surfaces.emplace_back(wall(-1.579f, 0.0165f, -1.579f, 0.2665f));
 			surfaces.emplace_back(wall(-1.579f, -0.2665f, -1.579f, -0.0165f));
-			// スラローム中央のバッフル
-			// (JSONに「ver0731の図面と未照合」という注記あり。実機と違ったらここを直す)
-			surfaces.emplace_back(wall(0.021f, 0.019f, 0.021f, 0.819f));
-			surfaces.emplace_back(wall(0.021f, -0.819f, 0.021f, -0.019f));
-			// ゴール/スラロームの境界
-			surfaces.emplace_back(wall(0.821f, 0.8f, 0.821f, 1.6715f));
-			surfaces.emplace_back(wall(0.821f, -1.6715f, 0.821f, -0.8f));
+			// 列2 (JSON: baffle_*_2, x=+0.021, 長さ0.8): 外壁(y=±1.6715)から生える
+			surfaces.emplace_back(wall(0.021f, 0.8715f, 0.021f, 1.6715f));
+			surfaces.emplace_back(wall(0.021f, -1.6715f, 0.021f, -0.8715f));
+			// 列3 (JSON: goal_slalom_boundary_*, x=+0.821, 長さ0.8715): 中央壁から生える
+			surfaces.emplace_back(wall(0.821f, 0.019f, 0.821f, 0.8905f));
+			surfaces.emplace_back(wall(0.821f, -0.8905f, 0.821f, -0.019f));
 			// ビンゴ棚裏のセンターライン
 			surfaces.emplace_back(wall(2.5025f, 0.0f, 2.8025f, 0.0f));
 
