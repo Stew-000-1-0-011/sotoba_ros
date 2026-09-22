@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <sotoba/math/se3.hpp>
@@ -72,6 +73,10 @@ namespace sotoba_ros {
 	/// 点群容量は構築時に固定され、run() はそれを超える点群を受け取ると
 	/// 何もせずに too_many_points を返す (再確保しない)。
 	/// 容量を増やしたければ作り直すこと。
+	///
+	/// ObjectDef::parent が指定されたオブジェクトの面倒もここで見る。
+	/// run() のたびに「親の姿勢 × 親から見た相対姿勢」でシードを作り直し、
+	/// 推定が成功したら相対姿勢を更新する。
 	class IcpEngine final {
 	public:
 		/// @param objects 推定対象。空でないこと。曲面が1つも無いオブジェクトは
@@ -85,8 +90,12 @@ namespace sotoba_ros {
 		IcpEngine(const IcpEngine&) = delete;
 		auto operator=(const IcpEngine&) -> IcpEngine& = delete;
 
-		/// 次の run() のシードとなる姿勢を設定する。
+		/// 次の run() のシードとなる姿勢を設定する (LiDAR座標系)。
+		/// 親を持つオブジェクトに対しては、親から見た相対姿勢もここで更新される。
 		void set_pose(std::size_t iobj, const sotoba::math::SE3& pose) noexcept;
+
+		/// 初期姿勢へ戻す。親を持つオブジェクトは相対姿勢のほうを初期値へ戻す。
+		void reset_pose(std::size_t iobj) noexcept;
 		/// 直近の推定姿勢 (オブジェクトローカル -> センサ座標系)。
 		auto pose(std::size_t iobj) const noexcept -> sotoba::math::SE3;
 
@@ -100,6 +109,10 @@ namespace sotoba_ros {
 
 		auto object_count() const noexcept -> std::size_t;
 		auto points_capacity() const noexcept -> std::size_t;
+
+		/// 親の指定が解決できなかったオブジェクトについての説明。
+		/// (未知の名前、自分自身、入れ子が2段以上)。構築時に確定する。
+		auto warnings() const noexcept -> std::span<const std::string>;
 
 		/// SE3 の6自由度を決めるのに最低限必要な対応点数。
 		static auto min_correspondences() noexcept -> std::size_t;

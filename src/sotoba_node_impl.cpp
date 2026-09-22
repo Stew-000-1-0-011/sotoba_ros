@@ -66,8 +66,6 @@ namespace sotoba_ros {
 
 		std::vector<ObjectDef> objects;
 		std::vector<std::string> topic_names;
-		/// 直近に更新できた姿勢 (publish 済みの値)。失敗時のリセット元にもなる。
-		std::vector<SE3> initial_poses;
 		std::vector<std::size_t> failure_counts;
 
 		/// 点群容量が足りなくなったら作り直すので optional。
@@ -168,7 +166,7 @@ namespace sotoba_ros {
 			auto& n = this->node;
 
 			this->topic_names.reserve(this->objects.size());
-			this->initial_poses.reserve(this->objects.size());
+
 			std::unordered_map<std::string, std::size_t> used{};
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
 				const auto& obj = this->objects[iobj];
@@ -187,7 +185,6 @@ namespace sotoba_ros {
 					used.emplace(topic, iobj);
 				}
 				this->topic_names.emplace_back(std::move(topic));
-				this->initial_poses.emplace_back(obj.initial_pose);
 			}
 			this->failure_counts.assign(this->objects.size(), 0);
 		}
@@ -263,6 +260,9 @@ namespace sotoba_ros {
 					std::span<const ObjectDef>{this->objects},
 					capacity
 				);
+				for (const auto& warning : engine->warnings()) {
+					RCLCPP_WARN(this->node.get_logger(), "%s", warning.c_str());
+				}
 				// 作り直しでも推定済みの姿勢は引き継ぐ。
 				if (this->engine) {
 					for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
@@ -313,6 +313,7 @@ namespace sotoba_ros {
 
 			if (!this->ensure_engine(this->points.size())) { return; }
 
+			// 親を持つオブジェクトのシードの作り直しは IcpEngine::run() 側でやる。
 			const auto run_status = this->engine->run(std::span{this->points}, this->icp_params);
 			if (run_status != RunStatus::ok) {
 				RCLCPP_ERROR_THROTTLE(
@@ -359,8 +360,8 @@ namespace sotoba_ros {
 
 					if (this->reset_after_failures != 0
 						&& this->failure_counts[iobj] >= this->reset_after_failures) {
-						this->engine->set_pose(iobj, this->initial_poses[iobj]);
-						poses.back() = this->initial_poses[iobj];
+						this->engine->reset_pose(iobj);
+						poses.back() = this->engine->pose(iobj);
 						this->failure_counts[iobj] = 0;
 						RCLCPP_WARN(
 							this->node.get_logger(),
