@@ -16,8 +16,12 @@
 #include <vector>
 
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include <sotoba/math/se3.hpp>
@@ -95,6 +99,9 @@ namespace sotoba_ros {
 		rclcpp::Publisher<msg::BeliefArray>::SharedPtr initial_pub{};
 		rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub{};
 		rclcpp::Subscription<msg::BeliefArray>::SharedPtr prior_sub{};
+		std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster{};
+		std::unique_ptr<tf2_ros::Buffer> tf_buffer{};
+		std::shared_ptr<tf2_ros::TransformListener> tf_listener{};
 
 		// --- パラメータ ---
 		std::size_t max_points{2048};
@@ -107,6 +114,10 @@ namespace sotoba_ros {
 		MarkerStyle marker_style{};
 		/// internal / external / external_or_internal
 		std::string prior_source{"internal"};
+		bool publish_tf{false};
+		std::string tf_parent_frame{"field"};
+		std::string tf_object{"field"};
+		std::string tf_child_frame{};
 		ProcessNoise process_noise{};
 		double prior_timeout{0.5};
 
@@ -114,8 +125,83 @@ namespace sotoba_ros {
 			: node{node}, objects{std::move(objects)} {
 			this->declare_params();
 			this->prepare_objects();
+			this->setup_tf();
 			this->create_pubs();
 			this->create_sub();
+		}
+
+		void setup_tf() {
+			if (!this->publish_tf) { return; }
+			this->tf_broadcaster =
+				std::make_unique<tf2_ros::TransformBroadcaster>(this->node);
+			if (!this->tf_child_frame.empty()) {
+				this->tf_buffer = std::make_unique<tf2_ros::Buffer>(this->node.get_clock());
+				this->tf_listener =
+					std::make_shared<tf2_ros::TransformListener>(*this->tf_buffer);
+			}
+		}
+
+		/// 推定した姿勢をTFに流す。
+		///
+		/// pose は「オブジェクト -> LiDAR」なので、逆が「オブジェクト座標系での
+		/// LiDARの姿勢」。tf_child_frame が指定されていれば、
+		/// 「LiDAR -> その子」をTFから引いて合成する。
+		void broadcast_tf(const sensor_msgs::msg::LaserScan& scan, const SE3& pose) {
+			if (!this->tf_broadcaster) { return; }
+
+			auto lidar_in_object = pose.inv();
+			std::string child = scan.header.frame_id;
+
+			if (!this->tf_child_frame.empty()) {
+				try {
+					const auto transform = this->tf_buffer->lookupTransform(
+						scan.header.frame_id,
+						this->tf_child_frame,
+						tf2::TimePointZero
+					);
+					const auto& t = transform.transform;
+					// SE3::normalize() が非constなので const にしない
+					SE3 child_in_lidar{
+						sotoba::math::UQuaternion{sotoba::math::Vec4{
+							static_cast<float>(t.rotation.x),
+							static_cast<float>(t.rotation.y),
+							static_cast<float>(t.rotation.z),
+							static_cast<float>(t.rotation.w)
+						}},
+						Vec3{
+							static_cast<float>(t.translation.x),
+							static_cast<float>(t.translation.y),
+							static_cast<float>(t.translation.z)
+						}
+					};
+					lidar_in_object = lidar_in_object * child_in_lidar.normalize();
+					child = this->tf_child_frame;
+				} catch (const tf2::TransformException& e) {
+					RCLCPP_WARN_THROTTLE(
+						this->node.get_logger(),
+						*this->node.get_clock(),
+						5000,
+						"cannot look up '%s' -> '%s': %s",
+						scan.header.frame_id.c_str(),
+						this->tf_child_frame.c_str(),
+						e.what()
+					);
+					return;
+				}
+			}
+
+			geometry_msgs::msg::TransformStamped message{};
+			message.header.stamp = scan.header.stamp;
+			message.header.frame_id = this->tf_parent_frame;
+			message.child_frame_id = child;
+			message.transform.translation.x = static_cast<double>(lidar_in_object.p.x());
+			message.transform.translation.y = static_cast<double>(lidar_in_object.p.y());
+			message.transform.translation.z = static_cast<double>(lidar_in_object.p.z());
+			message.transform.rotation.x = static_cast<double>(lidar_in_object.uq.v.x());
+			message.transform.rotation.y = static_cast<double>(lidar_in_object.uq.v.y());
+			message.transform.rotation.z = static_cast<double>(lidar_in_object.uq.v.z());
+			message.transform.rotation.w = static_cast<double>(lidar_in_object.uq.v.w());
+			this->tf_broadcaster->sendTransform(message);
 		}
 
 		void declare_params() {
@@ -188,6 +274,17 @@ namespace sotoba_ros {
 			this->process_noise.linear =
 				static_cast<float>(n.declare_parameter<double>("process_noise_linear", 0.5));
 			this->prior_timeout = n.declare_parameter<double>("prior_timeout", 0.5);
+
+			// --- TF ---
+			// 推定は「LiDAR座標系でのオブジェクトの姿勢」なので、逆に取ると
+			// 「オブジェクト座標系でのLiDARの姿勢」= 自己位置になる。
+			this->publish_tf = n.declare_parameter<bool>("publish_tf", false);
+			this->tf_parent_frame = n.declare_parameter<std::string>("tf_parent_frame", "field");
+			this->tf_object = n.declare_parameter<std::string>("tf_object", "field");
+			// 空ならスキャンの frame_id をそのまま子にする。
+			// URDF等で既に laser の親がいる場合は base_link などを指定する
+			// (その場合 base_link -> スキャンのフレーム をTFから引いて合成する)。
+			this->tf_child_frame = n.declare_parameter<std::string>("tf_child_frame", "");
 
 			// --- RViz2 表示 ---
 			this->publish_markers = n.declare_parameter<bool>("publish_markers", true);
@@ -557,6 +654,10 @@ namespace sotoba_ros {
 				msg.pose = to_msg(this->engine->pose(iobj));
 				this->pose_pubs[iobj]->publish(msg);
 				array.poses.emplace_back(msg.pose);
+
+				if (this->objects[iobj].name == this->tf_object) {
+					this->broadcast_tf(scan, this->engine->pose(iobj));
+				}
 			}
 
 			if (!array.poses.empty()) { this->pose_array_pub->publish(array); }
@@ -588,6 +689,11 @@ namespace sotoba_ros {
 			}
 		}
 	};
+
+	SotobaNode::SotobaNode(ObjectFactory factory, const rclcpp::NodeOptions& options)
+		: rclcpp::Node{"sotoba_node", options}
+		, impl_{std::make_unique<Impl>(*this, factory ? factory(*this) : std::vector<ObjectDef>{})} {
+	}
 
 	SotobaNode::SotobaNode(std::vector<ObjectDef> objects, const rclcpp::NodeOptions& options)
 		: rclcpp::Node{"sotoba_node", options}
