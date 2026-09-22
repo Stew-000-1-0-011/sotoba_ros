@@ -13,7 +13,10 @@ import sys
 import rclpy
 from geometry_msgs.msg import PoseArray
 from rclpy.node import Node
+from sotoba_ros.msg import BeliefArray
 from visualization_msgs.msg import MarkerArray
+
+STATUS_NAMES = {0: "not_run", 1: "updated", 2: "too_few", 3: "solve_failed"}
 
 # 許容誤差
 POSITION_TOLERANCE = 0.03  # [m]
@@ -34,8 +37,10 @@ class Checker(Node):
         self.create_subscription(
             PoseArray, "/fake_scan_publisher/truth_poses", self.on_truth, 10
         )
+        # 全オブジェクトぶん名前付きで出る信念分布を見る
+        # (~/object_poses は更新できたものしか出ないので突き合わせに使えない)
         self.create_subscription(
-            PoseArray, "/sotoba_node/object_poses", self.on_estimated, 10
+            BeliefArray, "/sotoba_node/posterior_beliefs", self.on_estimated, 10
         )
         self.create_subscription(
             MarkerArray, "/sotoba_node/object_markers", self.on_markers, 10
@@ -65,33 +70,48 @@ def main() -> int:
     elif node.estimated is None:
         print("NG: no estimated poses (is sotoba_node running?)")
         ok = False
-    elif len(node.truth.poses) != len(node.estimated.poses):
+    elif len(node.truth.poses) != len(node.estimated.means):
         print(
-            f"NG: {len(node.estimated.poses)} of {len(node.truth.poses)} object(s) "
-            "were published (some failed to update)"
+            f"NG: {len(node.estimated.means)} beliefs vs {len(node.truth.poses)} truth poses"
         )
         ok = False
     else:
-        if node.estimated.header.frame_id != node.truth.header.frame_id:
+        est = node.estimated
+        if est.header.frame_id != node.truth.header.frame_id:
             print(
-                f"NG: frame_id mismatch: {node.estimated.header.frame_id!r} "
+                f"NG: frame_id mismatch: {est.header.frame_id!r} "
                 f"vs {node.truth.header.frame_id!r}"
             )
             ok = False
-        for i, (t, e) in enumerate(zip(node.truth.poses, node.estimated.poses)):
+
+        updated = 0
+        wrong = 0
+        for i, (t, e) in enumerate(zip(node.truth.poses, est.means)):
             err = math.dist(
                 (t.position.x, t.position.y, t.position.z),
                 (e.position.x, e.position.y, e.position.z),
             )
             yaw_err = abs(yaw_of(t.orientation) - yaw_of(e.orientation))
+            status = est.status[i] if i < len(est.status) else 1
+            name = est.names[i] if i < len(est.names) else f"#{i}"
             good = err <= POSITION_TOLERANCE and yaw_err <= YAW_TOLERANCE
-            ok = ok and good
+            if status == 1:
+                updated += 1
+                if not good:
+                    wrong += 1
+            tag = "ok" if (status == 1 and good) else ("NG" if status == 1 else "--")
             print(
-                f"[{'ok' if good else 'NG'}] object {i}: "
-                f"est=({e.position.x:.3f}, {e.position.y:.3f}, {e.position.z:.3f}) "
-                f"truth=({t.position.x:.3f}, {t.position.y:.3f}, {t.position.z:.3f}) "
+                f"[{tag}] {name}: {STATUS_NAMES.get(status, status)} "
                 f"pos_err={err:.4f} yaw_err={yaw_err:.4f}"
             )
+
+        print(f"updated {updated} / {len(node.truth.poses)}, wrong {wrong}")
+        # publish された姿勢が全部正しく、フィールド (先頭) が取れていること
+        if wrong != 0 or updated == 0:
+            ok = False
+        if est.status and est.status[0] != 1:
+            print("NG: the first object (field) was not updated")
+            ok = False
 
     if node.markers is None:
         print("NG: no markers published")

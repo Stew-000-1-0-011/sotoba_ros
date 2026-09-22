@@ -59,7 +59,7 @@ namespace sotoba_ros {
 			block.j = static_cast<std::uint8_t>(iobj);
 			for (std::uint8_t i = 0; i < 6; ++i) {
 				for (std::uint8_t j = 0; j < 6; ++j) {
-					block.lambda[i * 6 + j] =
+					block.information[i * 6 + j] =
 						static_cast<double>(beliefs[iobj].information[i, j]);
 				}
 			}
@@ -103,7 +103,7 @@ namespace sotoba_ros {
 			for (std::uint8_t i = 0; i < 6; ++i) {
 				for (std::uint8_t j = i; j < 6; ++j) {
 					information[i, j] = 0.5f
-						* static_cast<float>(block.lambda[i * 6 + j] + block.lambda[j * 6 + i]);
+						* static_cast<float>(block.information[i * 6 + j] + block.information[j * 6 + i]);
 				}
 			}
 			beliefs[ilocal].information = information;

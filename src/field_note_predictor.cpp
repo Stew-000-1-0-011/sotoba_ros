@@ -49,6 +49,17 @@ namespace {
 			this->require_parent_updated_ =
 				this->declare_parameter<bool>("require_parent_updated", true);
 
+			// 定義上の初期姿勢 (transient local)。
+			// 相対姿勢の初期値をここから取る。推定結果から取ると、
+			// 最初のスキャンで誤った対応付けをした場合にそれを覚え込んでしまう。
+			this->initial_sub_ = this->create_subscription<sotoba_ros::msg::BeliefArray>(
+				"initial_beliefs",
+				rclcpp::QoS{1}.transient_local(),
+				[this](const sotoba_ros::msg::BeliefArray::ConstSharedPtr message) {
+					this->on_initial(*message);
+				}
+			);
+
 			this->prior_pub_ =
 				this->create_publisher<sotoba_ros::msg::BeliefArray>("prior_beliefs", rclcpp::QoS{10});
 			this->posterior_sub_ = this->create_subscription<sotoba_ros::msg::BeliefArray>(
@@ -89,6 +100,40 @@ namespace {
 			return it->second.empty() ? nullptr : &it->second;
 		}
 
+		/// 定義上の初期姿勢から、親から見た相対姿勢の初期値を作る。
+		void on_initial(const sotoba_ros::msg::BeliefArray& message) {
+			const auto object_num = message.names.size();
+			if (object_num == 0 || message.means.size() != object_num) { return; }
+
+			std::vector<Belief> beliefs(object_num);
+			sotoba_ros::from_belief_msg(
+				message,
+				std::span<const std::string>{message.names},
+				std::span<Belief>{beliefs}
+			);
+
+			std::unordered_map<std::string, std::size_t> index_of{};
+			for (std::size_t i = 0; i < object_num; ++i) { index_of.emplace(message.names[i], i); }
+
+			std::size_t attached = 0;
+			for (std::size_t i = 0; i < object_num; ++i) {
+				const auto* const parent_name = this->parent_of(message.names[i]);
+				if (parent_name == nullptr) { continue; }
+				const auto it = index_of.find(*parent_name);
+				if (it == index_of.end()) { continue; }
+
+				this->relative_[message.names[i]] =
+					beliefs[it->second].mean.inv() * beliefs[i].mean;
+				++attached;
+			}
+			this->has_initial_ = true;
+			RCLCPP_INFO(
+				this->get_logger(),
+				"got initial beliefs: %zu object(s) attached to a parent",
+				attached
+			);
+		}
+
 		void on_posterior(const sotoba_ros::msg::BeliefArray& message) {
 			const auto object_num = message.names.size();
 			if (object_num == 0 || message.means.size() != object_num) { return; }
@@ -127,11 +172,8 @@ namespace {
 
 				const auto relative = this->relative_.find(message.names[i]);
 				if (relative == this->relative_.end()) {
-					// まだ一度も相対姿勢が取れていないので、初期値として今の姿勢から作る
-					this->relative_.emplace(
-						message.names[i],
-						beliefs[iparent].mean.inv() * beliefs[i].mean
-					);
+					// 初期姿勢がまだ来ていない。推定から相対姿勢を作ると誤対応を
+					// 覚え込むので、ここでは何もしない。
 					continue;
 				}
 
@@ -152,11 +194,13 @@ namespace {
 
 		std::vector<std::string> rules_{};
 		bool require_parent_updated_{true};
+		bool has_initial_{false};
 		std::unordered_map<std::string, std::string> parent_cache_{};
 		std::unordered_map<std::string, SE3> relative_{};
 
 		rclcpp::Publisher<sotoba_ros::msg::BeliefArray>::SharedPtr prior_pub_{};
 		rclcpp::Subscription<sotoba_ros::msg::BeliefArray>::SharedPtr posterior_sub_{};
+		rclcpp::Subscription<sotoba_ros::msg::BeliefArray>::SharedPtr initial_sub_{};
 	};
 } // namespace
 
