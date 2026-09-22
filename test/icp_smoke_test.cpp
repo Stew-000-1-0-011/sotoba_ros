@@ -14,6 +14,8 @@
 #include <limits>
 #include <numbers>
 #include <span>
+#include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -27,10 +29,32 @@ namespace {
 	constexpr int ray_num = 720;
 	/// 位置の許容誤差 [m]
 	constexpr float position_tolerance = 0.03f;
-	/// 初期姿勢からのずらし量。センサ座標系での平面運動。
-	constexpr float shift_x = 0.10f;
-	constexpr float shift_y = -0.06f;
-	constexpr float shift_yaw = 0.03f; // [rad]
+	/// ロボットが動いたぶん (センサ座標系)。親を持たないオブジェクト全部に効く。
+	constexpr float robot_shift_x = 0.10f;
+	constexpr float robot_shift_y = -0.06f;
+	constexpr float robot_shift_yaw = 0.03f; // [rad]
+	/// 子オブジェクトが親の中で動いたぶん (自分の座標系)。
+	constexpr float child_shift_x = 0.03f;
+	constexpr float child_shift_y = 0.015f;
+	constexpr float child_shift_yaw = 0.10f; // [rad]
+	/// 何スキャンぶん回すか。子のシードは親の推定から作り直されるので、
+	/// 親が収束した次のスキャンで子が合う。
+	constexpr int scan_num = 3;
+
+	/// ObjectDef::parent を index に直す (親なしは objects.size())。
+	auto resolve_parents(std::span<const ObjectDef> objects) -> std::vector<std::size_t> {
+		std::unordered_map<std::string, std::size_t> index_of{};
+		for (std::size_t i = 0; i < objects.size(); ++i) { index_of.emplace(objects[i].name, i); }
+
+		std::vector<std::size_t> parents(objects.size(), objects.size());
+		for (std::size_t i = 0; i < objects.size(); ++i) {
+			if (objects[i].parent.empty()) { continue; }
+			if (const auto it = index_of.find(objects[i].parent); it != index_of.end()) {
+				parents[i] = it->second;
+			}
+		}
+		return parents;
+	}
 
 	/// 真の姿勢で全オブジェクトへレイキャストし、センサ座標系の点群を作る。
 	/// 走査面はセンサ座標系の z = 0 平面。
@@ -74,12 +98,23 @@ auto main() -> int {
 		return 1;
 	}
 
-	// 初期姿勢を少しずらしたものを真値とする。
-	const auto shift = SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, shift_yaw}))
-		* SE3::trans(Vec3{shift_x, shift_y, 0.f});
-	std::vector<SE3> truth{};
-	truth.reserve(objects.size());
-	for (const auto& object : objects) { truth.emplace_back(shift * object.initial_pose); }
+	// 真値を作る。
+	// 親なし: ロボットが動いたぶんをセンサ座標系で掛ける。
+	// 子: 親の真値 × (親から見た初期姿勢 × 自分の座標系での移動)。
+	const auto parents = resolve_parents(std::span{objects});
+	const auto robot_shift =
+		SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, robot_shift_yaw}))
+		* SE3::trans(Vec3{robot_shift_x, robot_shift_y, 0.f});
+	const auto child_shift = SE3::trans(Vec3{child_shift_x, child_shift_y, 0.f})
+		* SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, child_shift_yaw}));
+
+	std::vector<SE3> truth(objects.size(), SE3::ide());
+	for (std::size_t iobj = 0; iobj < objects.size(); ++iobj) {
+		const auto iparent = parents[iobj];
+		truth[iobj] = iparent < objects.size()
+			? truth[iparent] * objects[iobj].initial_pose * child_shift
+			: robot_shift * objects[iobj].initial_pose;
+	}
 
 	const auto points = simulate_scan(std::span{objects}, std::span{truth});
 	if (points.size() < IcpEngine::min_correspondences()) {
@@ -89,18 +124,29 @@ auto main() -> int {
 	std::printf("simulated scan: %zu points\n", points.size());
 
 	IcpEngine engine{std::span<const ObjectDef>{objects}, points.size()};
+	for (const auto& warning : engine.warnings()) {
+		std::fprintf(stderr, "warning: %s\n", warning.c_str());
+	}
+
 	IcpParams params{};
 	params.max_loop_num = 30;
-	params.accept_distance = 0.2f;
-	params.accept_distance_begin = 0.8f;
+	// 小さいオブジェクトは緩いゲートだと隣の形状を掴んで飛んでいくので、
+	// ゲートは絞る (スケジュールは使わない)。
+	params.accept_distance = 0.1f;
+	params.accept_distance_begin = 0.f;
 	params.tikhonov = {1.f, 1.f, 0.01f, 0.f, 0.f, 1.f};
 
-	if (const auto status = engine.run(std::span{points}, params); status != RunStatus::ok) {
-		std::fprintf(stderr, "run_icp failed: %s\n", to_string(status));
-		return 1;
+	// 同じスキャンを複数回流して、ノード上の連続スキャンを模す。
+	for (int iscan = 0; iscan < scan_num; ++iscan) {
+		if (const auto status = engine.run(std::span{points}, params); status != RunStatus::ok) {
+			std::fprintf(stderr, "run_icp failed: %s\n", to_string(status));
+			return 1;
+		}
 	}
 
 	int failed = 0;
+	int updated = 0;
+	int invisible = 0;
 	for (std::size_t iobj = 0; iobj < objects.size(); ++iobj) {
 		const auto estimated = engine.pose(iobj);
 		const auto& expected = truth[iobj];
@@ -109,13 +155,27 @@ auto main() -> int {
 		const float dz = estimated.p.z() - expected.p.z();
 		const float error = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-		const bool ok =
-			engine.status(iobj) == ObjectStatus::updated && error <= position_tolerance;
-		if (!ok) { ++failed; }
+		// 見えていないオブジェクト (陰に隠れている等) は評価しない。
+		// publish されたもの (= updated) が正しいことと、
+		// 十分な数が推定できていることを見る。
+		const bool visible = engine.correspondence_count(iobj) > 0;
+		const bool is_updated = engine.status(iobj) == ObjectStatus::updated;
+		const char* tag = "--";
+		if (is_updated) {
+			++updated;
+			if (error <= position_tolerance) {
+				tag = "ok";
+			} else {
+				tag = "NG";
+				++failed;
+			}
+		} else if (!visible) {
+			++invisible;
+		}
 
 		std::printf(
 			"[%s] object %zu '%s': status = %s, correspondences = %zu, position error = %.4f m\n",
-			ok ? "ok" : "NG",
+			tag,
 			iobj,
 			objects[iobj].name.c_str(),
 			to_string(engine.status(iobj)),
@@ -124,5 +184,20 @@ auto main() -> int {
 		);
 	}
 
-	return failed == 0 ? 0 : 1;
+	std::printf(
+		"updated %d / %zu object(s) (%d invisible), %d wrong\n",
+		updated,
+		objects.size(),
+		invisible,
+		failed
+	);
+
+	// publish される姿勢が全部正しく、かつ見えているものの過半が取れていること。
+	const auto visible_num = objects.size() - static_cast<std::size_t>(invisible);
+	if (failed != 0) { return 1; }
+	if (static_cast<std::size_t>(updated) * 2 < visible_num) {
+		std::fprintf(stderr, "too few objects were updated.\n");
+		return 1;
+	}
+	return 0;
 }

@@ -101,6 +101,39 @@ namespace sotoba_ros {
 			);
 		}
 
+		/// ノーツ (JSON: rules.note_size, notes.blue / notes.orange)
+		constexpr float note_size = 0.15f;
+
+		/// LiDAR の走査面がノーツより上を通ると、ノーツには1本も当たらない。
+		static_assert(
+			lidar_height < note_size,
+			"lidar_height must be below note_size, otherwise notes are invisible to the scan"
+		);
+
+		/// ノーツ1個。床に置かれた立方体。
+		///
+		/// フィールドの子オブジェクトにしてあるので、initial_pose は
+		/// **フィールド座標系**での姿勢 (JSONの notes.* の座標そのまま)。
+		/// 毎スキャン、フィールドの推定姿勢からシードが作り直されるので、
+		/// ロボットが動いてもノーツを見失わない。
+		auto make_note(const char* const name, const float x, const float y) -> ObjectDef {
+			std::vector<Surface> surfaces{};
+			surfaces.emplace_back(sotoba::surface::BoxOuter(
+				Vec3{0.f, 0.f, 0.5f * note_size},
+				SquareMat<3>::ide(),
+				Vec3{0.5f * note_size, 0.5f * note_size, 0.5f * note_size},
+				// 壁と同じく、走査面に効かない上面/底面は落とす
+				std::array<bool, 6>{false, false, false, false, true, true}
+			));
+
+			return ObjectDef{
+				.name = name,
+				.surfaces = std::move(surfaces),
+				.initial_pose = SE3::trans(Vec3{x, y, 0.f}),
+				.parent = "field",
+			};
+		}
+
 		/// フィールド全体。壁もビンゴ棚も一緒に動く剛体なので1オブジェクトにまとめる。
 		auto make_field() -> ObjectDef {
 			std::vector<Surface> surfaces{};
@@ -167,26 +200,27 @@ namespace sotoba_ros {
 		std::vector<ObjectDef> objects{};
 		objects.emplace_back(make_field());
 
-		// ノーツ (JSON: notes) は 0.15m の立方体で、走査面 (0.14m) にぎりぎり掛かる。
-		// ただし試合中に動かされるので、フィールドと同じ剛体に入れてはいけない。
-		// 個別オブジェクトにしても1個あたり数点しか当たらず収束しないので、
-		// 既定では**モデル化しない**。外れ値として効いてくるので、
-		// huber_k を有効にして殴るのが現実的。
+		// ノーツ (JSON: notes.blue / notes.orange)。
+		// フィールドの子オブジェクトなので、座標はフィールド座標系のまま書ける。
 		//
-		// どうしても1つずつ追いたい場合の例:
-		// std::vector<Surface> note{};
-		// note.emplace_back(sotoba::surface::BoxOuter(
-		// 	Vec3{0.f, 0.f, 0.075f},
-		// 	SquareMat<3>::ide(),
-		// 	Vec3{0.075f, 0.075f, 0.075f}
-		// ));
-		// objects.emplace_back(ObjectDef{
-		// 	.name = "note_orange_0",
-		// 	.surfaces = std::move(note),
-		// 	// フィールド座標 (-2.699, 0.125) にあるノーツを、初期ロボット姿勢から見た位置
-		// 	.initial_pose = robot_pose_to_object_pose(start_x, start_y, start_yaw)
-		// 		* SE3::trans(Vec3{-2.699f, 0.125f, 0.f}),
-		// });
+		// 注意: 走査面 (lidar_height) はノーツの上端 (0.15m) すれすれなので、
+		// 当たる点は1個あたり10数点しかない。さらに、
+		// - 高さ0.3mのセンターライン壁の向こう側 (反対チーム側) のノーツは完全に隠れる
+		// - 面が1つしか見えないノーツは、その面に沿う方向とyawが観測できない
+		//   (正規方程式がランク落ちして solve_failed になり、publish されない)
+		// ので、全部が常に取れるとは思わないこと。詳しくはREADMEを参照。
+		objects.emplace_back(make_note("note_orange_0", -2.699f, 0.125f));
+		objects.emplace_back(make_note("note_orange_1", -2.499f, 0.125f));
+		objects.emplace_back(make_note("note_orange_2", -2.299f, 0.125f));
+		objects.emplace_back(make_note("note_orange_3", -2.099f, 0.125f));
+		objects.emplace_back(make_note("note_orange_4", -1.899f, 0.125f));
+		objects.emplace_back(make_note("note_orange_5", -1.699f, 0.125f));
+		objects.emplace_back(make_note("note_blue_0", -2.699f, -0.125f));
+		objects.emplace_back(make_note("note_blue_1", -2.499f, -0.125f));
+		objects.emplace_back(make_note("note_blue_2", -2.299f, -0.125f));
+		objects.emplace_back(make_note("note_blue_3", -2.099f, -0.125f));
+		objects.emplace_back(make_note("note_blue_4", -1.899f, -0.125f));
+		objects.emplace_back(make_note("note_blue_5", -1.699f, -0.125f));
 
 		return objects;
 	}
