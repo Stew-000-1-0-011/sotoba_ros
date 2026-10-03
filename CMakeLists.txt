@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.22)
 # rosidl は C のターゲットも作るので C も有効にする
 project(sotoba_ros C CXX)
 
-# sotoba が deducing this (P0847) と多次元 operator[] (P2128) を使うので C++23 必須。
-set(CMAKE_CXX_STANDARD 23)
+# sotoba が deducing this (P0847) と多次元 operator[] (P2128) を使うので C++23 以上が要る。
+# このパッケージは C++26 でビルドする。
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -75,6 +76,9 @@ target_include_directories(sotoba_ros_belief
 		$<INSTALL_INTERFACE:include>
 )
 target_link_libraries(sotoba_ros_belief PUBLIC sotoba::sotoba Eigen3::Eigen)
+# sotoba が INTERFACE で cxx_std_23 を要求するので、ここで 26 を明示しておく
+# (CMake は最大値を採るため、外から CMAKE_CXX_STANDARD を下げられても 26 で通る)
+target_compile_features(sotoba_ros_belief PUBLIC cxx_std_26)
 set_target_properties(sotoba_ros_belief PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- 信念分布 <-> メッセージ ---
@@ -103,6 +107,7 @@ target_include_directories(sotoba_ros_icp_engine
 # Eigen は sotoba の ICP ヘッダが直接使う。sotoba::sotoba 経由でも伝播するが、
 # 依存を明示しておく。
 target_link_libraries(sotoba_ros_icp_engine PUBLIC sotoba::sotoba Eigen3::Eigen)
+target_compile_features(sotoba_ros_icp_engine PUBLIC cxx_std_26)
 set_target_properties(sotoba_ros_icp_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- オブジェクト定義 ---
@@ -129,6 +134,7 @@ target_link_libraries(sotoba_ros_markers
 		${visualization_msgs_TARGETS}
 		${geometry_msgs_TARGETS}
 )
+target_compile_features(sotoba_ros_markers PUBLIC cxx_std_26)
 set_target_properties(sotoba_ros_markers PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- ノード本体 ---

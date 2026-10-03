@@ -5,8 +5,13 @@
 **LiDAR座標系での姿勢**を推定して `Pose` を publish する ROS 2 パッケージ。
 
 対応環境: ROS 2 Lyrical Luth / Ubuntu 26.04。
-sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うため C++23 必須
-(GCC 14+ / Clang 18+)。
+**このパッケージは C++26 でビルドする** (`CMAKE_CXX_STANDARD 26` と、
+主要ターゲットへの `cxx_std_26` を明示)。sotoba 自体は C++23 以上
+(deducing this / 多次元 `operator[]`) を要求するので、26 はそれを満たす。
+
+GCC 15.2 (Lyrical の既定) で確認済み。GCC 14 でも `-std=c++26` で通る。
+rosidl が生成するメッセージのコードは rosidl 側の設定で C++20 のままだが、
+同じ libstdc++ ABI なので混在して問題ない。
 
 ## 構成
 
