@@ -19,17 +19,17 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 
-#include <sotoba/math/quaternion.hpp>
 #include <sotoba/math/se3.hpp>
 #include <sotoba/math/vec.hpp>
 
 #include "sotoba_ros/objects.hpp"
 
 namespace {
-	using sotoba::math::SE3;
 	using sotoba::math::UVec3;
 	using sotoba::math::Vec3;
+	namespace math = sotoba::math;
 	using sotoba_ros::ObjectDef;
+	using sotoba_ros::SE3;
 
 	class FakeScanPublisher final : public rclcpp::Node {
 	public:
@@ -125,13 +125,11 @@ namespace {
 		/// 時刻 t におけるロボットの運動 (センサ座標系での変換)。
 		auto motion(const float t) const -> SE3 {
 			if (!(this->motion_amplitude_ > 0.f) && !(this->motion_yaw_amplitude_ > 0.f)) {
-				return SE3::ide();
+				return SE3{};
 			}
 			const float w = 2.f * std::numbers::pi_v<float> / std::max(0.1f, this->motion_period_);
-			return SE3::rot(sotoba::math::quaternion::ypr(
-					   Vec3{0.f, 0.f, this->motion_yaw_amplitude_ * std::sin(w * t)}
-				   ))
-				* SE3::trans(Vec3{
+			return math::rot(math::ypr(Vec3{0.f, 0.f, this->motion_yaw_amplitude_ * std::sin(w * t)}))
+				* math::trans(Vec3{
 					  this->motion_amplitude_ * std::sin(w * t),
 					  this->motion_amplitude_ * (1.f - std::cos(w * t)),
 					  0.f
@@ -141,8 +139,8 @@ namespace {
 		/// このスキャンでの真の姿勢を作り直す。
 		void update_truth(const float t) {
 			const auto shift =
-				SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, this->shift_yaw_}))
-				* SE3::trans(Vec3{this->shift_x_, this->shift_y_, 0.f});
+				math::rot(math::ypr(Vec3{0.f, 0.f, this->shift_yaw_}))
+				* math::trans(Vec3{this->shift_x_, this->shift_y_, 0.f});
 			const auto pose = this->motion(t) * shift;
 
 			this->truth_.clear();
@@ -209,13 +207,15 @@ namespace {
 			truth.poses.reserve(this->truth_.size());
 			for (const auto& pose : this->truth_) {
 				geometry_msgs::msg::Pose msg{};
-				msg.position.x = static_cast<double>(pose.p.x());
-				msg.position.y = static_cast<double>(pose.p.y());
-				msg.position.z = static_cast<double>(pose.p.z());
-				msg.orientation.x = static_cast<double>(pose.uq.v.x());
-				msg.orientation.y = static_cast<double>(pose.uq.v.y());
-				msg.orientation.z = static_cast<double>(pose.uq.v.z());
-				msg.orientation.w = static_cast<double>(pose.uq.v.w());
+				const auto& t = pose.translation();
+				const auto& q = pose.unit_quaternion();
+				msg.position.x = static_cast<double>(t.x());
+				msg.position.y = static_cast<double>(t.y());
+				msg.position.z = static_cast<double>(t.z());
+				msg.orientation.x = static_cast<double>(q.x());
+				msg.orientation.y = static_cast<double>(q.y());
+				msg.orientation.z = static_cast<double>(q.z());
+				msg.orientation.w = static_cast<double>(q.w());
 				truth.poses.emplace_back(msg);
 			}
 			this->truth_pub_->publish(truth);

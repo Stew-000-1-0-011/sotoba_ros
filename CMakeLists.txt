@@ -207,6 +207,7 @@ if(BUILD_TESTING)
 		PRIVATE
 			sotoba_ros_icp_engine
 			sotoba_ros_objects
+			sotoba_ros_belief
 	)
 	# ament_add_test を使う (素の add_test だと結果ファイルが出ず colcon test-result から見えない)
 	ament_add_test(sotoba_ros_icp_smoke

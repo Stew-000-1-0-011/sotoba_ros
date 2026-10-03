@@ -11,12 +11,15 @@
 
 #include <cmath>
 #include <cstdio>
+
+#include <Eigen/Dense>
 #include <limits>
 #include <numbers>
 #include <span>
 #include <variant>
 #include <vector>
 
+#include "sotoba_ros/belief.hpp"
 #include "sotoba_ros/icp_engine.hpp"
 #include "sotoba_ros/objects.hpp"
 
@@ -25,8 +28,12 @@ namespace {
 	using sotoba::math::UVec3;
 
 	constexpr int ray_num = 720;
-	/// 位置の許容誤差 [m]
+	/// 位置の許容誤差 [m]。事前が支配的なオブジェクト (観測できない方向がある) は
+	/// この値を超えうるので、下の NEES でも見る。
 	constexpr float position_tolerance = 0.03f;
+	/// 正規化推定誤差二乗 (並進3自由度) の上限。
+	/// 推定が自分の申告する共分散と整合しているかを見る。chi^2(3) の 99% は 11.3。
+	constexpr float nees_limit = 11.3f;
 	/// ロボットが動いたぶん (センサ座標系)。全オブジェクトが同じだけずれる。
 	///
 	/// ここは**小さめ**にしてある。大きく動かすと、ノーツのような小さい
@@ -82,9 +89,8 @@ auto main() -> int {
 
 	// 真値を作る。ロボットが動いたぶんをセンサ座標系で掛ける
 	// (静止した世界をロボットが見ているので、全オブジェクトに同じ変換がかかる)。
-	const auto robot_shift =
-		SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, robot_shift_yaw}))
-		* SE3::trans(Vec3{robot_shift_x, robot_shift_y, 0.f});
+	const auto robot_shift = math::rot(math::ypr(Vec3{0.f, 0.f, robot_shift_yaw}))
+		* math::trans(Vec3{robot_shift_x, robot_shift_y, 0.f});
 
 	std::vector<SE3> truth{};
 	truth.reserve(objects.size());
@@ -107,11 +113,28 @@ auto main() -> int {
 	// ゲートは絞る (スケジュールは使わない)。
 	params.accept_distance = 0.1f;
 	params.accept_distance_begin = 0.f;
-	params.tikhonov = {1.f, 1.f, 0.01f, 0.f, 0.f, 1.f};
+	// (並進, 回転) の順。2D LiDAR で見えない z / roll / pitch を抑える
+	params.tikhonov = {0.f, 0.f, 1.f, 1.f, 1.f, 0.01f};
+	// 事前を使うので sotoba 側が noise を要求する
+	params.noise = NoiseParams{0.03f, 0.005f};
+
+	// 事前分布: 初期姿勢まわり。面外 (z, roll, pitch) は取付で決まっていて動かない。
+	std::vector<Belief> priors{};
+	priors.reserve(objects.size());
+	const auto prior_information =
+		diagonal_information({0.05f, 0.05f, 0.005f, 0.005f, 0.005f, 0.05f});
+	for (const auto& object : objects) {
+		priors.emplace_back(Belief{object.initial_pose, prior_information});
+	}
 
 	// 同じスキャンを複数回流して、ノード上の連続スキャンを模す。
 	for (int iscan = 0; iscan < scan_num; ++iscan) {
-		if (const auto status = engine.run(std::span{points}, params); status != RunStatus::ok) {
+		// 事前の平均は前回の推定に合わせて動かす (持続予測に相当)
+		for (std::size_t iobj = 0; iobj < objects.size(); ++iobj) {
+			priors[iobj].mean = engine.pose(iobj);
+		}
+		const auto status = engine.run(std::span{points}, params, std::span{priors});
+		if (status != RunStatus::ok) {
 			std::fprintf(stderr, "run_icp failed: %s\n", to_string(status));
 			return 1;
 		}
@@ -123,10 +146,15 @@ auto main() -> int {
 	for (std::size_t iobj = 0; iobj < objects.size(); ++iobj) {
 		const auto estimated = engine.pose(iobj);
 		const auto& expected = truth[iobj];
-		const float dx = estimated.p.x() - expected.p.x();
-		const float dy = estimated.p.y() - expected.p.y();
-		const float dz = estimated.p.z() - expected.p.z();
-		const float error = std::sqrt(dx * dx + dy * dy + dz * dz);
+		const Eigen::Vector3f error_vector = estimated.translation() - expected.translation();
+		const float error = error_vector.norm();
+
+		// 事後共分散の並進ブロックから NEES を出す
+		const Eigen::Matrix3f covariance =
+			engine.posterior_information(iobj).inverse().topLeftCorner<3, 3>();
+		const float nees = error > 1e-9f
+			? error_vector.dot(covariance.inverse() * error_vector)
+			: 0.f;
 
 		// 見えていないオブジェクト (陰に隠れている等) は評価しない。
 		// publish されたもの (= updated) が正しいことと、
@@ -136,7 +164,9 @@ auto main() -> int {
 		const char* tag = "--";
 		if (is_updated) {
 			++updated;
-			if (error <= position_tolerance) {
+			// 位置が十分近いか、共分散と整合していればよい。
+			// 事前で埋めた方向は誤差が残るが、そのぶん共分散も大きいはず。
+			if (error <= position_tolerance || nees <= nees_limit) {
 				tag = "ok";
 			} else {
 				tag = "NG";
@@ -147,13 +177,15 @@ auto main() -> int {
 		}
 
 		std::printf(
-			"[%s] object %zu '%s': status = %s, correspondences = %zu, position error = %.4f m\n",
+			"[%s] object %zu '%s': status = %s, correspondences = %zu, "
+			"position error = %.4f m, NEES = %.1f\n",
 			tag,
 			iobj,
 			objects[iobj].name.c_str(),
 			to_string(engine.status(iobj)),
 			engine.correspondence_count(iobj),
-			static_cast<double>(error)
+			static_cast<double>(error),
+			static_cast<double>(nees)
 		);
 	}
 

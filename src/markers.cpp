@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include <sotoba/math/se3.hpp>
 #include <sotoba/math/square_mat.hpp>
 #include <sotoba/math/vec.hpp>
 
@@ -163,7 +164,7 @@ namespace sotoba_ros {
 
 	auto build_object_markers(
 		std::span<const ObjectDef> objects,
-		std::span<const sotoba::math::SE3> poses,
+		std::span<const SE3> poses,
 		std::span<const std::uint8_t> fresh,
 		const std::string& frame_id,
 		const builtin_interfaces::msg::Time& stamp,
@@ -239,7 +240,7 @@ namespace sotoba_ros {
 					style.lifetime
 				);
 				label.text = object.name;
-				label.pose.position = to_point(pose.p);
+				label.pose.position = to_point(sotoba::math::from_eigen(pose.translation()));
 				label.scale.z = 0.3;
 				array.markers.emplace_back(std::move(label));
 			}

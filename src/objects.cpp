@@ -33,19 +33,17 @@ namespace sotoba_ros {
 		/// 「LiDAR -> フィールド」を作って逆を取る。
 		auto robot_pose_to_object_pose(const ObjectsConfig& config) -> SE3 {
 			auto lidar_in_field =
-				SE3::trans(Vec3{config.start_x, config.start_y, config.lidar_height})
-				* SE3::rot(sotoba::math::quaternion::ypr(Vec3{0.f, 0.f, config.start_yaw}));
+				math::trans(Vec3{config.start_x, config.start_y, config.lidar_height})
+				* math::rot(math::ypr(Vec3{0.f, 0.f, config.start_yaw}));
 
 			// Z軸が床を向いている場合は、x軸まわりに180度回す。
 			// x軸 (正面) はそのままで、y と z が反転する。
 			if (config.lidar_upside_down) {
 				lidar_in_field = lidar_in_field
-					* SE3::rot(sotoba::math::quaternion::ypr(
-						Vec3{std::numbers::pi_v<float>, 0.f, 0.f}
-					));
+					* math::rot(math::ypr(Vec3{std::numbers::pi_v<float>, 0.f, 0.f}));
 			}
 
-			return lidar_in_field.inv();
+			return lidar_in_field.inverse();
 		}
 
 		/// 壁1本 (JSONの walls.segments の1要素) を、厚みと高さを持つ直方体にする。
@@ -123,7 +121,7 @@ namespace sotoba_ros {
 			return ObjectDef{
 				.name = name,
 				.surfaces = std::move(surfaces),
-				.initial_pose = robot_pose_to_object_pose(config) * SE3::trans(Vec3{x, y, 0.f}),
+				.initial_pose = robot_pose_to_object_pose(config) * math::trans(Vec3{x, y, 0.f}),
 			};
 		}
 

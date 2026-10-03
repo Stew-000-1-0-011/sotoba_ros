@@ -123,7 +123,7 @@ namespace {
 				if (it == index_of.end()) { continue; }
 
 				this->relative_[message.names[i]] =
-					beliefs[it->second].mean.inv() * beliefs[i].mean;
+					beliefs[it->second].mean.inverse() * beliefs[i].mean;
 				++attached;
 			}
 			this->has_initial_ = true;
@@ -167,7 +167,7 @@ namespace {
 				// (= 親の中で動いたことを追う)
 				if (status_of(i) == updated && status_of(iparent) == updated) {
 					this->relative_[message.names[i]] =
-						beliefs[iparent].mean.inv() * beliefs[i].mean;
+						beliefs[iparent].mean.inverse() * beliefs[i].mean;
 				}
 
 				const auto relative = this->relative_.find(message.names[i]);

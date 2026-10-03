@@ -42,6 +42,12 @@ sotoba が deducing this (P0847) と多次元 `operator[]` (P2128) を使うた�
 
 という切り分けになる。
 
+## 依存
+
+sotoba は Sophus (1.24.6 以降) を使う。`find_package(Sophus)` で見つからなければ
+sotoba 側が FetchContent で取ってくるが、ネットワークに出られない環境では
+先に Sophus を入れて `CMAKE_PREFIX_PATH` に置くこと。
+
 ## ビルド
 
 sotoba は rosdep に無いので、先に install しておく。
@@ -128,7 +134,7 @@ URDF 等で既に LiDAR のフレームに親がいる場合は、`tf_child_fram
 | pub | `~/objects/<name>/pose` | `geometry_msgs/msg/PoseStamped` |
 | pub | `~/object_poses` | `geometry_msgs/msg/PoseArray` |
 | pub | `~/object_markers` | `visualization_msgs/msg/MarkerArray` (RViz2用、transient local) |
-| pub | `~/posterior_beliefs` | `sotoba_ros/msg/BeliefArray` (全オブジェクト、名前と状態付き) |
+| pub | `~/posterior_beliefs` | `sotoba_ros/msg/BeliefArray` (全オブジェクト、名前・状態・事後情報行列) |
 | pub | `~/initial_beliefs` | `sotoba_ros/msg/BeliefArray` (定義上の初期姿勢、transient local) |
 | sub | `~/prior_beliefs` | `sotoba_ros/msg/BeliefArray` (外部予測ノードから。`prior_source` 次第) |
 
@@ -177,13 +183,25 @@ python3 test/check_poses.py   # 別端末で
   (残差はほぼ観測できないz方向)。
 - RViz2 (Xvfb上のヘッドレス) で実際に表示されることも確認済み。上のスクリーンショットがそれ。
 
-## 事前分布 (シードの与え方)
+## 事前分布
 
 ICPは前スキャンの推定を次のシードにするが、**ロボットが動くとシードが置いていかれる**。
 特にノーツのような小さいオブジェクトは、自分のサイズぶん動かれると対応点を失うか、
 0.2m間隔で並ぶ隣のノーツを掴む。
 
 そこで sotoba_node は毎スキャン「事前分布」を作ってからICPを回す。
+事前は**シードとしてだけでなく正規方程式そのものに入る** (sotoba 側が対応済み)。
+そのため、観測できない方向は事前のまま残り、1面しか見えないオブジェクトも
+1点から解ける。`use_prior: false` にすると従来どおりシードとしてだけ使う。
+
+重要: 事前を使うと `updated` は「よく決まっている」を意味しなくなる。
+見えない方向は事前がそのまま答えになるので、**下流は `~/posterior_beliefs` の
+情報行列を見ること**。合成スキャンでの実測では、1面しか見えないノーツが
+誤差 6.3 cm に対してその方向の σ が 3.7 cm (NEES 3.8 ≈ 1.7σ) と、
+不確かさを正しく申告していた。
+
+接空間の成分順序は sotoba (Sophus) に合わせて **(並進, 回転)**。
+`tikhonov` も `initial_sigma_*` も `BeliefArray` の情報行列もこの順。
 
 - **内蔵の持続予測** (既定): 平均はそのまま、不確かさだけ増やす。
   オブジェクト同士の関係は知らない

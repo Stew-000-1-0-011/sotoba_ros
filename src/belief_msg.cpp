@@ -9,30 +9,34 @@ namespace sotoba_ros {
 	namespace {
 		auto to_pose_msg(const SE3& pose) -> geometry_msgs::msg::Pose {
 			geometry_msgs::msg::Pose message{};
-			message.position.x = static_cast<double>(pose.p.x());
-			message.position.y = static_cast<double>(pose.p.y());
-			message.position.z = static_cast<double>(pose.p.z());
-			message.orientation.x = static_cast<double>(pose.uq.v.x());
-			message.orientation.y = static_cast<double>(pose.uq.v.y());
-			message.orientation.z = static_cast<double>(pose.uq.v.z());
-			message.orientation.w = static_cast<double>(pose.uq.v.w());
+			const auto& t = pose.translation();
+			const auto& q = pose.unit_quaternion();
+			message.position.x = static_cast<double>(t.x());
+			message.position.y = static_cast<double>(t.y());
+			message.position.z = static_cast<double>(t.z());
+			message.orientation.x = static_cast<double>(q.x());
+			message.orientation.y = static_cast<double>(q.y());
+			message.orientation.z = static_cast<double>(q.z());
+			message.orientation.w = static_cast<double>(q.w());
 			return message;
 		}
 
 		auto from_pose_msg(const geometry_msgs::msg::Pose& message) -> SE3 {
+			Eigen::Quaternionf q{
+				static_cast<float>(message.orientation.w),
+				static_cast<float>(message.orientation.x),
+				static_cast<float>(message.orientation.y),
+				static_cast<float>(message.orientation.z)
+			};
+			q.normalize();
 			return SE3{
-				sotoba::math::UQuaternion{sotoba::math::Vec4{
-					static_cast<float>(message.orientation.x),
-					static_cast<float>(message.orientation.y),
-					static_cast<float>(message.orientation.z),
-					static_cast<float>(message.orientation.w)
-				}},
-				sotoba::math::Vec3{
+				Sophus::SO3f{q},
+				Eigen::Vector3f{
 					static_cast<float>(message.position.x),
 					static_cast<float>(message.position.y),
 					static_cast<float>(message.position.z)
 				}
-			}.normalize();
+			};
 		}
 	} // namespace
 
@@ -57,10 +61,10 @@ namespace sotoba_ros {
 			msg::InformationBlock block{};
 			block.i = static_cast<std::uint8_t>(iobj);
 			block.j = static_cast<std::uint8_t>(iobj);
-			for (std::uint8_t i = 0; i < 6; ++i) {
-				for (std::uint8_t j = 0; j < 6; ++j) {
+			for (int i = 0; i < 6; ++i) {
+				for (int j = 0; j < 6; ++j) {
 					block.information[i * 6 + j] =
-						static_cast<double>(beliefs[iobj].information[i, j]);
+						static_cast<double>(beliefs[iobj].information(i, j));
 				}
 			}
 			message.blocks.emplace_back(block);
@@ -87,7 +91,7 @@ namespace sotoba_ros {
 			message_to_local[imsg] = it->second;
 			if (imsg < message.means.size()) {
 				beliefs[it->second].mean = from_pose_msg(message.means[imsg]);
-				beliefs[it->second].information = Information{};
+				beliefs[it->second].information = Information::Zero();
 				++matched;
 			}
 		}
@@ -99,10 +103,10 @@ namespace sotoba_ros {
 			const auto ilocal = message_to_local[block.i];
 			if (ilocal >= names.size()) { continue; }
 
-			Information information{};
-			for (std::uint8_t i = 0; i < 6; ++i) {
-				for (std::uint8_t j = i; j < 6; ++j) {
-					information[i, j] = 0.5f
+			Information information = Information::Zero();
+			for (int i = 0; i < 6; ++i) {
+				for (int j = 0; j < 6; ++j) {
+					information(i, j) = 0.5f
 						* static_cast<float>(block.information[i * 6 + j] + block.information[j * 6 + i]);
 				}
 			}

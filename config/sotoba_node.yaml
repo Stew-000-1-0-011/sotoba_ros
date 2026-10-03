@@ -43,17 +43,19 @@
     accept_distance_begin: 0.8
     # 姿勢更新量がこれ未満になったら打ち切る。0なら打ち切らない
     convergence_delta: 0.0
-    # Tikhonov正則化。0..2 が回転(roll, pitch, yaw)、3..5 が並進(x, y, z)。
-    # 2D LiDAR では roll / pitch / z が観測できないので、そこは必ず拘束すること。
-    # yaw の 0.01 は、円柱のような回転対称オブジェクトでランク落ちして
-    # solve_failed になるのを防ぐための気持ち程度の値
-    tikhonov: [1.0, 1.0, 0.01, 0.0, 0.0, 1.0]
+    # Tikhonov正則化 (LM減衰。事前分布とは別概念)。
+    # **成分順序は [並進(x,y,z), 回転(roll,pitch,yaw)]** で、sotoba の接空間に合わせてある
+    # (以前は回転が先だった。上流の変更に追従)。
+    # 2D LiDAR では z / roll / pitch が観測できないのでそこを抑える。
+    # 事前分布を使う場合 (use_prior: true) は事前が同じ役目をするので本来は不要
+    tikhonov: [0.0, 0.0, 1.0, 1.0, 1.0, 0.01]
 
     # --- 重み付け (0なら無効) ---
-    # 距離方向の標準偏差 [m]
-    sigma_range: 0.0
+    # 距離方向の標準偏差 [m]。事前分布を使うなら必須
+    # (情報行列の単位を揃えるため、sotoba が 0 を拒否する)
+    sigma_range: 0.03
     # 角度方向の標準偏差 [rad]
-    sigma_angle: 0.0
+    sigma_angle: 0.005
     # Huberの閾値。sigma_* が0なら単位は [m]
     huber_k: 0.0
 
@@ -72,9 +74,28 @@
     # --- 事前分布 ---
     # internal / external / external_or_internal
     prior_source: "internal"
-    # 持続予測で1秒あたりに増やす不確かさ
+    # 持続予測で1秒あたりに増やす不確かさ (走査面内: x, y, yaw)
     process_noise_angular: 0.5  # [rad^2/s]
     process_noise_linear: 0.5   # [m^2/s]
+    # 走査面外 (z, roll, pitch)。2D LiDAR では観測できない方向なので、
+    # ここを大きくすると事前も観測も情報を持たない方向ができて推定が壊れる。
+    # LiDAR の取付高も傾きも動かないので、ほぼ0でよい
+    process_noise_angular_out_of_plane: 1.0e-8
+    process_noise_linear_out_of_plane: 1.0e-8
+
+    # 事前分布を正規方程式に入れるか。
+    # true だと、観測できない方向は事前のまま残り、1面しか見えないオブジェクトも
+    # 1点から解ける (sotoba の min_correspondences_with_prior)。
+    # ただし「updated」が「よく決まっている」を意味しなくなるので、
+    # 下流は ~/posterior_beliefs の情報行列を見ること。
+    # false なら事前はシードとしてだけ使う (従来の挙動)
+    use_prior: true
+
+    # 初期姿勢の確からしさ (標準偏差)。面外は取付で決まっていて動かないので厳しく
+    initial_sigma_xy: 0.05       # [m]
+    initial_sigma_z: 0.005       # [m]
+    initial_sigma_tilt: 0.005    # [rad]
+    initial_sigma_yaw: 0.05      # [rad]
     # 外部の事前がこれより古ければ内蔵にフォールバック [s]
     prior_timeout: 0.5
 

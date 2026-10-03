@@ -11,13 +11,17 @@
 #include <variant>
 #include <vector>
 
+#include <sophus/se3.hpp>
+
 #include <sotoba/math/se3.hpp>
 #include <sotoba/surface/box.hpp>
 #include <sotoba/surface/cylinder.hpp>
 #include <sotoba/surface/rectangle.hpp>
 
 namespace sotoba_ros {
-	using sotoba::math::SE3;
+	/// 姿勢は Sophus。接空間の成分順序は (並進, 回転) で、添字0..2が並進、3..5が回転。
+	using SE3 = Sophus::SE3f;
+	namespace math = sotoba::math;
 	using sotoba::math::SquareMat;
 	using sotoba::math::UVec3;
 	using sotoba::math::Vec3;
@@ -47,7 +51,7 @@ namespace sotoba_ros {
 		/// 外部ノードから ~/prior_beliefs で与えることもできる。
 		/// オブジェクト間の連動 (例: ノーツはフィールドに付いて動く) のような
 		/// アプリ固有の予測は外部ノードの仕事。
-		SE3 initial_pose{SE3::ide()};
+		SE3 initial_pose{};
 	};
 
 	/// オブジェクトを組み立てるときの寸法・初期姿勢。

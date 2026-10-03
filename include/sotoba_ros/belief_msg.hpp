@@ -3,8 +3,8 @@
 /// @file belief_msg.hpp
 /// Belief と BeliefArray メッセージの相互変換。
 ///
-/// 情報行列の添字順は **[回転3, 並進3]** で、ROS の PoseWithCovariance
-/// ([x, y, z, rx, ry, rz]) とは逆。変換をここ1箇所に閉じ込める。
+/// 情報行列の添字順は sotoba (Sophus の接空間) と同じ **[並進3, 回転3]**。
+/// ROS の PoseWithCovariance と同じ並びだが、あちらは共分散であることに注意。
 
 #include <span>
 #include <string>

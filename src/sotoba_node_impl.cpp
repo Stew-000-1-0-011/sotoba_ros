@@ -21,7 +21,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/transform_listener.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include <sotoba/math/se3.hpp>
@@ -34,19 +34,19 @@
 
 namespace sotoba_ros {
 	namespace {
-		using sotoba::math::SE3;
 		using sotoba::math::Vec3;
 
 		auto to_msg(const SE3& pose) -> geometry_msgs::msg::Pose {
 			geometry_msgs::msg::Pose msg{};
-			msg.position.x = static_cast<double>(pose.p.x());
-			msg.position.y = static_cast<double>(pose.p.y());
-			msg.position.z = static_cast<double>(pose.p.z());
-			// sotoba の UQuaternion は v = (x, y, z, w)。
-			msg.orientation.x = static_cast<double>(pose.uq.v.x());
-			msg.orientation.y = static_cast<double>(pose.uq.v.y());
-			msg.orientation.z = static_cast<double>(pose.uq.v.z());
-			msg.orientation.w = static_cast<double>(pose.uq.v.w());
+			const auto& t = pose.translation();
+			const auto& q = pose.unit_quaternion();
+			msg.position.x = static_cast<double>(t.x());
+			msg.position.y = static_cast<double>(t.y());
+			msg.position.z = static_cast<double>(t.z());
+			msg.orientation.x = static_cast<double>(q.x());
+			msg.orientation.y = static_cast<double>(q.y());
+			msg.orientation.z = static_cast<double>(q.z());
+			msg.orientation.w = static_cast<double>(q.w());
 			return msg;
 		}
 
@@ -74,6 +74,9 @@ namespace sotoba_ros {
 		std::vector<std::string> names;
 		std::vector<std::string> topic_names;
 		std::vector<std::size_t> failure_counts;
+		/// 一度でも推定できたか。一度も見えていないオブジェクトを
+		/// 初期姿勢に戻しても意味がないので、リセットの対象外にする。
+		std::vector<std::uint8_t> ever_updated;
 
 		/// 直近の事後分布。次スキャンの事前のもとになる。
 		std::vector<Belief> beliefs{};
@@ -120,6 +123,9 @@ namespace sotoba_ros {
 		std::string tf_child_frame{};
 		ProcessNoise process_noise{};
 		double prior_timeout{0.5};
+		/// 事前分布を solve に渡すか。false ならシードとしてだけ使う
+		bool use_prior{true};
+		Information initial_information{Information::Zero()};
 
 		explicit Impl(rclcpp::Node& node, std::vector<ObjectDef>&& objects)
 			: node{node}, objects{std::move(objects)} {
@@ -149,7 +155,7 @@ namespace sotoba_ros {
 		void broadcast_tf(const sensor_msgs::msg::LaserScan& scan, const SE3& pose) {
 			if (!this->tf_broadcaster) { return; }
 
-			auto lidar_in_object = pose.inv();
+			auto lidar_in_object = pose.inverse();
 			std::string child = scan.header.frame_id;
 
 			if (!this->tf_child_frame.empty()) {
@@ -160,21 +166,22 @@ namespace sotoba_ros {
 						tf2::TimePointZero
 					);
 					const auto& t = transform.transform;
-					// SE3::normalize() が非constなので const にしない
-					SE3 child_in_lidar{
-						sotoba::math::UQuaternion{sotoba::math::Vec4{
-							static_cast<float>(t.rotation.x),
-							static_cast<float>(t.rotation.y),
-							static_cast<float>(t.rotation.z),
-							static_cast<float>(t.rotation.w)
-						}},
-						Vec3{
+					Eigen::Quaternionf rotation{
+						static_cast<float>(t.rotation.w),
+						static_cast<float>(t.rotation.x),
+						static_cast<float>(t.rotation.y),
+						static_cast<float>(t.rotation.z)
+					};
+					rotation.normalize();
+					const SE3 child_in_lidar{
+						Sophus::SO3f{rotation},
+						Eigen::Vector3f{
 							static_cast<float>(t.translation.x),
 							static_cast<float>(t.translation.y),
 							static_cast<float>(t.translation.z)
 						}
 					};
-					lidar_in_object = lidar_in_object * child_in_lidar.normalize();
+					lidar_in_object = lidar_in_object * child_in_lidar;
 					child = this->tf_child_frame;
 				} catch (const tf2::TransformException& e) {
 					RCLCPP_WARN_THROTTLE(
@@ -194,13 +201,15 @@ namespace sotoba_ros {
 			message.header.stamp = scan.header.stamp;
 			message.header.frame_id = this->tf_parent_frame;
 			message.child_frame_id = child;
-			message.transform.translation.x = static_cast<double>(lidar_in_object.p.x());
-			message.transform.translation.y = static_cast<double>(lidar_in_object.p.y());
-			message.transform.translation.z = static_cast<double>(lidar_in_object.p.z());
-			message.transform.rotation.x = static_cast<double>(lidar_in_object.uq.v.x());
-			message.transform.rotation.y = static_cast<double>(lidar_in_object.uq.v.y());
-			message.transform.rotation.z = static_cast<double>(lidar_in_object.uq.v.z());
-			message.transform.rotation.w = static_cast<double>(lidar_in_object.uq.v.w());
+			const auto& translation = lidar_in_object.translation();
+			const auto& rotation = lidar_in_object.unit_quaternion();
+			message.transform.translation.x = static_cast<double>(translation.x());
+			message.transform.translation.y = static_cast<double>(translation.y());
+			message.transform.translation.z = static_cast<double>(translation.z());
+			message.transform.rotation.x = static_cast<double>(rotation.x());
+			message.transform.rotation.y = static_cast<double>(rotation.y());
+			message.transform.rotation.z = static_cast<double>(rotation.z());
+			message.transform.rotation.w = static_cast<double>(rotation.w());
 			this->tf_broadcaster->sendTransform(message);
 		}
 
@@ -230,12 +239,12 @@ namespace sotoba_ros {
 			this->icp_params.convergence_delta =
 				static_cast<float>(n.declare_parameter<double>("convergence_delta", 0.0));
 
-			// 2D LiDAR では z / roll / pitch が観測できないので、既定で強めに拘束する。
-			// yaw にも僅かに入れてあるのは、円柱のような回転対称オブジェクトで
-			// 正規方程式がランク落ちして solve_failed になるのを防ぐため。
+			// (並進, 回転) の順。2D LiDAR では z / roll / pitch が観測できないので、
+			// LM減衰として既定で強めに入れておく。
+			// (事前分布を使う場合は事前が同じ役目をするので、本来は不要)
 			const auto tikhonov = n.declare_parameter<std::vector<double>>(
 				"tikhonov",
-				std::vector<double>{1.0, 1.0, 0.01, 0.0, 0.0, 1.0}
+				std::vector<double>{0.0, 0.0, 1.0, 1.0, 1.0, 0.01}
 			);
 			if (tikhonov.size() == 6) {
 				for (std::size_t i = 0; i < 6; ++i) {
@@ -249,8 +258,10 @@ namespace sotoba_ros {
 				);
 			}
 
-			const auto sigma_range = n.declare_parameter<double>("sigma_range", 0.0);
-			const auto sigma_angle = n.declare_parameter<double>("sigma_angle", 0.0);
+			// 重みは 1/sigma^2 になる。事前分布と情報量の単位を揃えるため、
+			// 事前を使うなら実測値を入れておくこと (0だと重み1で単位が意味を持たない)。
+			const auto sigma_range = n.declare_parameter<double>("sigma_range", 0.03);
+			const auto sigma_angle = n.declare_parameter<double>("sigma_angle", 0.005);
 			if (sigma_range > 0.0 || sigma_angle > 0.0) {
 				this->icp_params.noise =
 					NoiseParams{static_cast<float>(sigma_range), static_cast<float>(sigma_angle)};
@@ -269,11 +280,41 @@ namespace sotoba_ros {
 				);
 				this->prior_source = "internal";
 			}
-			this->process_noise.angular =
-				static_cast<float>(n.declare_parameter<double>("process_noise_angular", 0.5));
-			this->process_noise.linear =
+			this->process_noise.angular_in_plane = static_cast<float>(
+				n.declare_parameter<double>("process_noise_angular", 0.5)
+			);
+			this->process_noise.linear_in_plane =
 				static_cast<float>(n.declare_parameter<double>("process_noise_linear", 0.5));
+			// 面外 (z, roll, pitch) は2D LiDARでは観測できない。
+			// ここを大きくすると、観測も事前も情報を持たない方向ができて推定が壊れる。
+			this->process_noise.angular_out_of_plane = static_cast<float>(
+				n.declare_parameter<double>("process_noise_angular_out_of_plane", 1e-8)
+			);
+			this->process_noise.linear_out_of_plane = static_cast<float>(
+				n.declare_parameter<double>("process_noise_linear_out_of_plane", 1e-8)
+			);
+
+			// 初期姿勢の確からしさ。面外は「取付で決まっていて動かない」ので厳しく。
+			// (並進, 回転) の順
+			const auto sigma_xy =
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_xy", 0.05));
+			const auto sigma_z =
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_z", 0.005));
+			const auto sigma_tilt =
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_tilt", 0.005));
+			const auto sigma_yaw =
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_yaw", 0.05));
+			const std::array<float, 6> sigma{
+				sigma_xy,
+				sigma_xy,
+				sigma_z,
+				sigma_tilt,
+				sigma_tilt,
+				sigma_yaw
+			};
+			this->initial_information = diagonal_information(sigma);
 			this->prior_timeout = n.declare_parameter<double>("prior_timeout", 0.5);
+			this->use_prior = n.declare_parameter<bool>("use_prior", true);
 
 			// --- TF ---
 			// 推定は「LiDAR座標系でのオブジェクトの姿勢」なので、逆に取ると
@@ -325,10 +366,12 @@ namespace sotoba_ros {
 				}
 				this->topic_names.emplace_back(std::move(topic));
 				this->names.emplace_back(obj.name);
-				// 初期姿勢が最初の事前。情報行列ゼロ = 「姿勢以外に何も知らない」
+				// 初期姿勢が最初の事前
 				this->beliefs[iobj].mean = obj.initial_pose;
+				this->beliefs[iobj].information = this->initial_information;
 			}
 			this->failure_counts.assign(this->objects.size(), 0);
+			this->ever_updated.assign(this->objects.size(), 0);
 		}
 
 		void create_pubs() {
@@ -558,13 +601,17 @@ namespace sotoba_ros {
 			std::vector<Belief> prior{};
 			if (!this->build_prior(stamp, prior)) { return; }
 
-			// 事前の平均をICPのシードにする。
-			// (情報行列そのものを solve に入れるのは sotoba 側の対応待ち)
+			// 事前の平均をシードにし、情報行列ごと solve に渡す。
+			// 観測できない方向は事前のまま残り、1面しか見えないオブジェクトも解ける。
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
 				this->engine->set_pose(iobj, prior[iobj].mean);
 			}
 
-			const auto run_status = this->engine->run(std::span{this->points}, this->icp_params);
+			const auto run_status = this->engine->run(
+				std::span{this->points},
+				this->icp_params,
+				this->use_prior ? std::span<const Belief>{prior} : std::span<const Belief>{}
+			);
 			if (run_status != RunStatus::ok) {
 				RCLCPP_ERROR_THROTTLE(
 					this->node.get_logger(),
@@ -584,20 +631,24 @@ namespace sotoba_ros {
 			this->publish(scan);
 		}
 
-		/// 事後 = 事前 + 観測。
+		/// 事後を取り込む。
 		///
-		/// 平均は ICP の出力をそのまま使う (現状のICPは事前を解に入れていないので、
-		/// 厳密にはMAPでなく最尤推定)。情報行列は事前と観測の和。
+		/// 事前は solve の中に入っているので、ICPの出力がそのまま事後の平均。
+		/// 情報行列も sotoba が H = A + JinvᵀΛJinv + diag(tikhonov) として返す。
+		///
+		/// 観測が取れなかったオブジェクトは、事後 = 事前。
 		void update_beliefs(const std::vector<Belief>& prior) {
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
-				this->beliefs[iobj].mean = this->engine->pose(iobj);
-				if (this->engine->status(iobj) == ObjectStatus::updated) {
-					this->beliefs[iobj].information =
-						fuse(prior[iobj].information, this->engine->observation_information(iobj));
-				} else {
-					// 観測が無かったので事前のまま
-					this->beliefs[iobj].information = prior[iobj].information;
+				if (this->engine->status(iobj) != ObjectStatus::updated) {
+					this->beliefs[iobj] = prior[iobj];
+					this->engine->set_pose(iobj, prior[iobj].mean);
+					continue;
 				}
+
+				this->beliefs[iobj].mean = this->engine->pose(iobj);
+				this->beliefs[iobj].information = this->use_prior
+					? this->engine->posterior_information(iobj)
+					: fuse(prior[iobj].information, this->engine->observation_information(iobj));
 			}
 		}
 
@@ -615,7 +666,7 @@ namespace sotoba_ros {
 
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
 				const auto status = this->engine->status(iobj);
-				poses.emplace_back(this->engine->pose(iobj));
+				poses.emplace_back(this->beliefs[iobj].mean);
 				fresh.emplace_back(status == ObjectStatus::updated ? 1 : 0);
 
 				if (status != ObjectStatus::updated) {
@@ -630,10 +681,12 @@ namespace sotoba_ros {
 						this->engine->correspondence_count(iobj)
 					);
 
-					if (this->reset_after_failures != 0
+					// 一度も取れていないものは「見えていない」だけなのでリセットしない
+					if (this->reset_after_failures != 0 && this->ever_updated[iobj] != 0
 						&& this->failure_counts[iobj] >= this->reset_after_failures) {
 						this->engine->reset_pose(iobj);
-						this->beliefs[iobj] = Belief{this->objects[iobj].initial_pose, {}};
+						this->beliefs[iobj] =
+							Belief{this->objects[iobj].initial_pose, this->initial_information};
 						poses.back() = this->engine->pose(iobj);
 						this->failure_counts[iobj] = 0;
 						RCLCPP_WARN(
@@ -647,16 +700,18 @@ namespace sotoba_ros {
 				}
 
 				this->failure_counts[iobj] = 0;
+				this->ever_updated[iobj] = 1;
 
 				geometry_msgs::msg::PoseStamped msg{};
 				msg.header.stamp = scan.header.stamp;
 				msg.header.frame_id = scan.header.frame_id;
-				msg.pose = to_msg(this->engine->pose(iobj));
+				// 事前と合成した後の姿勢を出す
+				msg.pose = to_msg(this->beliefs[iobj].mean);
 				this->pose_pubs[iobj]->publish(msg);
 				array.poses.emplace_back(msg.pose);
 
 				if (this->objects[iobj].name == this->tf_object) {
-					this->broadcast_tf(scan, this->engine->pose(iobj));
+					this->broadcast_tf(scan, this->beliefs[iobj].mean);
 				}
 			}
 

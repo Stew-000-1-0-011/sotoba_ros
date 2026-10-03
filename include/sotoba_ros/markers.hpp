@@ -12,8 +12,6 @@
 #include <builtin_interfaces/msg/time.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include <sotoba/math/se3.hpp>
-
 #include "sotoba_ros/objects.hpp"
 
 namespace sotoba_ros {
@@ -41,7 +39,7 @@ namespace sotoba_ros {
 	/// @param frame_id マーカーを置くフレーム (通常はLiDARのフレーム)
 	auto build_object_markers(
 		std::span<const ObjectDef> objects,
-		std::span<const sotoba::math::SE3> poses,
+		std::span<const SE3> poses,
 		std::span<const std::uint8_t> fresh,
 		const std::string& frame_id,
 		const builtin_interfaces::msg::Time& stamp,

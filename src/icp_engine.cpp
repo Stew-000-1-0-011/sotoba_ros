@@ -11,11 +11,11 @@
 #include <sotoba/icp_resource/resource.hpp>
 #include <sotoba/math/scalar_functions.hpp>
 
+#include <vector>
+
 namespace sotoba_ros {
 	namespace {
-		using sotoba::math::SE3;
 		using sotoba::math::Vec3;
-		using Vec6 = sotoba::math::Vec<6>;
 
 		using Resource = sotoba::icp_resource::NormalKnownResource<
 			sotoba::surface::BoxInner,
@@ -32,6 +32,16 @@ namespace sotoba_ros {
 				return RunStatus::invalid_weighting;
 			case sotoba::icp_resource::IcpError::invalid_accept_schedule:
 				return RunStatus::invalid_accept_schedule;
+			case sotoba::icp_resource::IcpError::invalid_accept_distance:
+				return RunStatus::invalid_accept_distance;
+			case sotoba::icp_resource::IcpError::invalid_loop_num:
+				return RunStatus::invalid_loop_num;
+			case sotoba::icp_resource::IcpError::prior_size_mismatch:
+				return RunStatus::prior_size_mismatch;
+			case sotoba::icp_resource::IcpError::prior_requires_noise_model:
+				return RunStatus::prior_requires_noise_model;
+			case sotoba::icp_resource::IcpError::invalid_prior_information:
+				return RunStatus::invalid_prior_information;
 			}
 			return RunStatus::ok;
 		}
@@ -72,6 +82,11 @@ namespace sotoba_ros {
 		case RunStatus::too_many_points: return "too_many_points";
 		case RunStatus::invalid_weighting: return "invalid_weighting";
 		case RunStatus::invalid_accept_schedule: return "invalid_accept_schedule";
+		case RunStatus::invalid_accept_distance: return "invalid_accept_distance";
+		case RunStatus::invalid_loop_num: return "invalid_loop_num";
+		case RunStatus::prior_size_mismatch: return "prior_size_mismatch";
+		case RunStatus::prior_requires_noise_model: return "prior_requires_noise_model";
+		case RunStatus::invalid_prior_information: return "invalid_prior_information";
 		}
 		return "unknown";
 	}
@@ -90,6 +105,8 @@ namespace sotoba_ros {
 		Resource resource;
 		/// ObjectDef::initial_pose (リセット用)。
 		std::vector<SE3> initial_poses;
+		/// run() のたびに組み直す事前分布 (span の寿命を持たせるため)。
+		std::vector<sotoba::icp_resource::ObjPrior> priors;
 
 		Impl(std::span<const ObjectDef> objects, const std::size_t points_capacity)
 			: resource{to_resource_from(objects, points_capacity)} {
@@ -122,16 +139,14 @@ namespace sotoba_ros {
 		return this->impl_->resource.obj_pose(static_cast<sotoba::u8>(iobj));
 	}
 
-	auto IcpEngine::run(std::span<const Vec3> points, const IcpParams& params) noexcept
-		-> RunStatus {
-		const Vec6 tikhonov{
-			params.tikhonov[0],
-			params.tikhonov[1],
-			params.tikhonov[2],
-			params.tikhonov[3],
-			params.tikhonov[4],
-			params.tikhonov[5]
-		};
+	auto IcpEngine::run(
+		std::span<const Vec3> points,
+		const IcpParams& params,
+		std::span<const Belief> priors
+	) noexcept -> RunStatus {
+		// sotoba の接空間と同じ (並進, 回転) の順
+		Sophus::SE3f::Tangent tikhonov{};
+		for (int i = 0; i < 6; ++i) { tikhonov[i] = params.tikhonov[static_cast<std::size_t>(i)]; }
 
 		sotoba::icp_resource::IcpWeighting weighting{};
 		if (params.noise) {
@@ -142,24 +157,31 @@ namespace sotoba_ros {
 		}
 		weighting.huber_k = params.huber_k;
 
-		// sotoba 側は距離の二乗で受け取る。
-		const auto err = this->impl_->resource.run_icp(
-			points,
-			tikhonov,
-			params.max_loop_num,
-			sotoba::math::pow2(params.accept_distance),
-			sotoba::math::pow2(params.convergence_delta),
-			weighting,
-			params.accept_distance_begin > 0.f ? sotoba::math::pow2(params.accept_distance_begin)
-											   : 0.f
-		);
+		// 事前分布を sotoba の形へ。平均まわりの左摂動という規約はそのまま。
+		this->impl_->priors.clear();
+		if (!priors.empty()) {
+			this->impl_->priors.reserve(priors.size());
+			for (const auto& prior : priors) {
+				this->impl_->priors.emplace_back(
+					sotoba::icp_resource::ObjPrior{prior.mean, prior.information}
+				);
+			}
+		}
 
-		return from_icp_error(err);
-	}
+		const sotoba::icp_resource::IcpParams sotoba_params{
+			.max_loop_num = params.max_loop_num,
+			// sotoba 側は距離の二乗で受け取る
+			.accept_distance2 = sotoba::math::pow2(params.accept_distance),
+			.convergence_delta2 = sotoba::math::pow2(params.convergence_delta),
+			.accept_distance2_begin = params.accept_distance_begin > 0.f
+				? sotoba::math::pow2(params.accept_distance_begin)
+				: 0.f,
+			.tikhonov = tikhonov,
+			.weighting = weighting,
+			.priors = std::span<const sotoba::icp_resource::ObjPrior>{this->impl_->priors}
+		};
 
-	auto IcpEngine::observation_information(const std::size_t iobj) const noexcept
-		-> sotoba::math::SymMat<6> {
-		return this->impl_->resource.information_matrix(static_cast<sotoba::u8>(iobj));
+		return from_icp_error(this->impl_->resource.run_icp(points, sotoba_params));
 	}
 
 	auto IcpEngine::status(const std::size_t iobj) const noexcept -> ObjectStatus {
@@ -182,7 +204,19 @@ namespace sotoba_ros {
 		return this->impl_->resource.points_capacity();
 	}
 
+	auto IcpEngine::observation_information(const std::size_t iobj) const noexcept -> Information {
+		return this->impl_->resource.information_matrix(static_cast<sotoba::u8>(iobj));
+	}
+
+	auto IcpEngine::posterior_information(const std::size_t iobj) const noexcept -> Information {
+		return this->impl_->resource.posterior_information(static_cast<sotoba::u8>(iobj));
+	}
+
 	auto IcpEngine::min_correspondences() noexcept -> std::size_t {
 		return Resource::min_correspondences;
+	}
+
+	auto IcpEngine::min_correspondences_with_prior() noexcept -> std::size_t {
+		return Resource::min_correspondences_with_prior;
 	}
 } // namespace sotoba_ros
