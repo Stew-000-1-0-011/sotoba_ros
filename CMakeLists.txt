@@ -112,10 +112,18 @@ set_target_properties(sotoba_ros_icp_engine PROPERTIES POSITION_INDEPENDENT_CODE
 
 # --- オブジェクト定義 ---
 # 形状を書き換えたときに再コンパイルされるのはここだけ。
+# sotoba の曲面の型しか使わない (ICP は要らない) ので、ICP ラッパには依存させない。
+# 同じフィールドを使うシミュレータなどがリンクできるよう、install して export する。
 add_library(sotoba_ros_objects STATIC
 	src/objects.cpp
 )
-target_link_libraries(sotoba_ros_objects PUBLIC sotoba_ros_icp_engine)
+target_include_directories(sotoba_ros_objects
+	PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>
+)
+target_link_libraries(sotoba_ros_objects PUBLIC sotoba::sotoba Eigen3::Eigen)
+target_compile_features(sotoba_ros_objects PUBLIC cxx_std_26)
 set_target_properties(sotoba_ros_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- RViz2 表示用のマーカー ---
@@ -193,6 +201,16 @@ target_link_libraries(field_note_predictor
 install(TARGETS sotoba_node fake_scan_publisher field_note_predictor
 	DESTINATION lib/${PROJECT_NAME}
 )
+# sotoba を FetchContent で取ってきた場合は sotoba::sotoba が export できないので、
+# find_package で見つかったときだけ export する
+if(sotoba_FOUND)
+	install(TARGETS sotoba_ros_objects
+		EXPORT export_${PROJECT_NAME}
+		ARCHIVE DESTINATION lib
+	)
+	ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+	ament_export_dependencies(sotoba Eigen3)
+endif()
 install(DIRECTORY include/
 	DESTINATION include
 )

@@ -33,6 +33,13 @@ rosidl が生成するメッセージのコードは rosidl 側の設定で C++2
 | `test/fake_scan_publisher.cpp` | `objects.cpp` の形状から合成 `/scan` と真値姿勢を流すノード |
 | `test/check_poses.py` | 真値と推定を突き合わせる手動テスト |
 
+### ほかのパッケージから形状を使う
+
+`sotoba_ros_objects` (`objects.cpp`) は install して export してある。
+同じフィールドを使うシミュレータなどは、`find_package(sotoba_ros)` して
+`sotoba_ros::sotoba_ros_objects` をリンクすれば `make_objects()` を呼べる
+(sotoba を FetchContent で取ってきた場合は export されない)。
+
 ### コンパイルの分割
 
 重いのは sotoba の ICP テンプレート (曲面の型リストで実体化される) なので、
