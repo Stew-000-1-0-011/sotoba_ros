@@ -72,8 +72,14 @@
     marker_show_labels: true
 
     # --- 事前分布 ---
-    # internal / external / external_or_internal
-    prior_source: "internal"
+    # 次のスキャンの事前分布 (ICP の初期値と不確かさ) をどこから得るか。
+    #   external: 外部の状態推定ノードが ~/prior_beliefs に出すものを使う (既定)。
+    #             来ていなければスキャンを捨てる
+    #   internal: 内蔵の持続予測 (直前の推定のまま、不確かさだけ増やす)。
+    #             状態推定ノード無しで単体で使うとき
+    #   external_or_internal: 外部を優先し、無ければ内蔵
+    # sotoba_node.launch.py は predictor:=false なら internal で上書きする
+    prior_source: "external"
     # 持続予測で1秒あたりに増やす不確かさ (走査面内: x, y, yaw)
     process_noise_angular: 0.5  # [rad^2/s]
     process_noise_linear: 0.5   # [m^2/s]
@@ -98,6 +104,9 @@
     initial_sigma_yaw: 0.05      # [rad]
     # 外部の事前がこれより古ければ内蔵にフォールバック [s]
     prior_timeout: 0.5
+    # 外部の事前を溜めておく長さ [s]。スキャン時刻以前で最新のものを使うので、
+    # スキャンの遅れ (撮ってから処理されるまで) より長くすること
+    prior_buffer_duration: 1.0
 
     # --- TF ---
     # 推定した姿勢をTFにも流す (起動時にしか読まない)。
@@ -114,5 +123,6 @@
     # --- 復帰処理 ---
     # 連続してこの回数だけ更新に失敗したら初期姿勢へ戻す (0で無効)。
     # シードが 0.1m 以上外れると対応点ゼロのまま発散して戻ってこないので、
-    # 有効にしておくことを推奨
+    # 有効にしておくことを推奨。
+    # prior_source が internal のときだけ効く (外部の事前を使うときは、立て直しは事前を出す側の仕事)
     reset_after_failures: 5

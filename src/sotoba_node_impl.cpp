@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <span>
 #include <string>
@@ -80,10 +81,14 @@ namespace sotoba_ros {
 
 		/// 直近の事後分布。次スキャンの事前のもとになる。
 		std::vector<Belief> beliefs{};
-		/// 外部から来た事前 (まだ使っていなければ has_external_prior が true)。
-		std::vector<Belief> external_prior{};
-		bool has_external_prior{false};
-		rclcpp::Time external_prior_stamp{};
+		/// 外部から来た事前の履歴 (時刻順)。スキャンごとに
+		/// 「スキャン時刻以前で最新のもの」を選ぶ。スキャンの時刻は撮った時刻なので
+		/// 届いた時点で過去になっており、最新の事前はたいていスキャンより新しい。
+		struct ExternalPrior {
+			rclcpp::Time stamp;
+			std::vector<Belief> beliefs;
+		};
+		std::deque<ExternalPrior> external_priors{};
 		/// 前スキャンの時刻。dt を出すのに使う。
 		rclcpp::Time last_scan_stamp{};
 		bool has_last_scan{false};
@@ -116,13 +121,15 @@ namespace sotoba_ros {
 		bool publish_markers{true};
 		MarkerStyle marker_style{};
 		/// internal / external / external_or_internal
-		std::string prior_source{"internal"};
+		std::string prior_source{"external"};
 		bool publish_tf{false};
 		std::string tf_parent_frame{"field"};
 		std::string tf_object{"field"};
 		std::string tf_child_frame{};
 		ProcessNoise process_noise{};
 		double prior_timeout{0.5};
+		/// 外部の事前を溜めておく長さ [s]。スキャンの遅れ (撮ってから届くまで) より長くする
+		double prior_buffer_duration{1.0};
 		/// 事前分布を solve に渡すか。false ならシードとしてだけ使う
 		bool use_prior{true};
 		Information initial_information{Information::Zero()};
@@ -270,7 +277,7 @@ namespace sotoba_ros {
 			if (huber_k > 0.0) { this->icp_params.huber_k = static_cast<float>(huber_k); }
 
 			// --- 事前分布 ---
-			this->prior_source = n.declare_parameter<std::string>("prior_source", "internal");
+			this->prior_source = n.declare_parameter<std::string>("prior_source", "external");
 			if (this->prior_source != "internal" && this->prior_source != "external"
 				&& this->prior_source != "external_or_internal") {
 				RCLCPP_WARN(
@@ -314,6 +321,7 @@ namespace sotoba_ros {
 			};
 			this->initial_information = diagonal_information(sigma);
 			this->prior_timeout = n.declare_parameter<double>("prior_timeout", 0.5);
+			this->prior_buffer_duration = n.declare_parameter<double>("prior_buffer_duration", 1.0);
 			this->use_prior = n.declare_parameter<bool>("use_prior", true);
 
 			// --- TF ---
@@ -345,7 +353,6 @@ namespace sotoba_ros {
 			this->topic_names.reserve(this->objects.size());
 			this->names.reserve(this->objects.size());
 			this->beliefs.assign(this->objects.size(), Belief{});
-			this->external_prior.assign(this->objects.size(), Belief{});
 
 			std::unordered_map<std::string, std::size_t> used{};
 			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
@@ -493,12 +500,14 @@ namespace sotoba_ros {
 		}
 
 		/// 外部予測ノードからの事前。ここでは溜めるだけで、
-		/// スキャン時刻までの差分は build_prior() が持続予測で埋める。
+		/// どれを使うかとスキャン時刻までの差分は build_prior() が決める。
+		/// メッセージに含まれないオブジェクトは、直近の事後をそのまま使う。
 		void on_prior(const msg::BeliefArray& message) {
+			ExternalPrior entry{rclcpp::Time{message.header.stamp}, this->beliefs};
 			const auto matched = from_belief_msg(
 				message,
 				std::span<const std::string>{this->names},
-				std::span<Belief>{this->external_prior}
+				std::span<Belief>{entry.beliefs}
 			);
 			if (matched == 0) {
 				RCLCPP_WARN_THROTTLE(
@@ -509,8 +518,17 @@ namespace sotoba_ros {
 				);
 				return;
 			}
-			this->external_prior_stamp = rclcpp::Time{message.header.stamp};
-			this->has_external_prior = true;
+
+			// 時刻順に入れる (届く順が入れ替わることがあるので)
+			auto it = this->external_priors.end();
+			while (it != this->external_priors.begin() && std::prev(it)->stamp > entry.stamp) { --it; }
+			this->external_priors.insert(it, std::move(entry));
+
+			const auto newest = this->external_priors.back().stamp;
+			while (this->external_priors.size() > 1
+				&& (newest - this->external_priors.front().stamp).seconds() > this->prior_buffer_duration) {
+				this->external_priors.pop_front();
+			}
 		}
 
 		/// このスキャンに対する事前分布を作る。
@@ -523,10 +541,19 @@ namespace sotoba_ros {
 			const bool want_external = this->prior_source != "internal";
 			bool used_external = false;
 
-			if (want_external && this->has_external_prior) {
-				const auto age = (stamp - this->external_prior_stamp).seconds();
-				if (age >= 0.0 && age <= this->prior_timeout) {
-					prior = this->external_prior;
+			// スキャン時刻以前で最新の外部事前
+			const ExternalPrior* chosen = nullptr;
+			for (auto it = this->external_priors.rbegin(); it != this->external_priors.rend(); ++it) {
+				if (it->stamp <= stamp) {
+					chosen = &*it;
+					break;
+				}
+			}
+
+			if (want_external && chosen != nullptr) {
+				const auto age = (stamp - chosen->stamp).seconds();
+				if (age <= this->prior_timeout) {
+					prior = chosen->beliefs;
 					// 外部の時刻からスキャン時刻までを埋める
 					for (auto& belief : prior) {
 						belief.information = propagate(
@@ -546,6 +573,15 @@ namespace sotoba_ros {
 						this->prior_timeout
 					);
 				}
+			} else if (want_external && !this->external_priors.empty()) {
+				RCLCPP_WARN_THROTTLE(
+					this->node.get_logger(),
+					*this->node.get_clock(),
+					5000,
+					"every external prior is newer than the scan (oldest is %.3f s ahead). "
+					"is the prior buffer shorter than the scan latency?",
+					(this->external_priors.front().stamp - stamp).seconds()
+				);
 			} else if (want_external) {
 				RCLCPP_WARN_THROTTLE(
 					this->node.get_logger(),
@@ -626,7 +662,10 @@ namespace sotoba_ros {
 			this->update_beliefs(prior);
 			this->last_scan_stamp = stamp;
 			this->has_last_scan = true;
-			this->has_external_prior = false;
+			// このスキャンより前の外部事前は、以降のスキャンでも選ばれないので捨てる
+			while (this->external_priors.size() > 1 && this->external_priors[1].stamp <= stamp) {
+				this->external_priors.pop_front();
+			}
 
 			this->publish(scan);
 		}
@@ -682,7 +721,9 @@ namespace sotoba_ros {
 					);
 
 					// 一度も取れていないものは「見えていない」だけなのでリセットしない
-					if (this->reset_after_failures != 0 && this->ever_updated[iobj] != 0
+					// 外部の事前を使うときは、見失ったときの立て直しは事前を出す側の仕事
+					if (this->prior_source == "internal" && this->reset_after_failures != 0
+						&& this->ever_updated[iobj] != 0
 						&& this->failure_counts[iobj] >= this->reset_after_failures) {
 						this->engine->reset_pose(iobj);
 						this->beliefs[iobj] =
