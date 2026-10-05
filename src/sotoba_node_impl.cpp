@@ -9,11 +9,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -35,6 +37,7 @@
 
 namespace sotoba_ros {
 	namespace {
+		using sotoba::math::UVec3;
 		using sotoba::math::Vec3;
 
 		auto to_msg(const SE3& pose) -> geometry_msgs::msg::Pose {
@@ -97,6 +100,11 @@ namespace sotoba_ros {
 		std::unique_ptr<IcpEngine> engine{};
 
 		std::vector<Vec3> points{};
+		/// points の各点の光線の向き (LiDAR 座標系の角度) と距離。ray_gate で使う
+		std::vector<float> point_angles{};
+		std::vector<float> point_ranges{};
+		/// ray_gate 用に、事前の姿勢へ動かした全オブジェクトの曲面
+		std::vector<Surface> gate_surfaces{};
 
 		std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> pose_pubs{};
 		rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pose_array_pub{};
@@ -128,6 +136,10 @@ namespace sotoba_ros {
 		std::string tf_child_frame{};
 		ProcessNoise process_noise{};
 		double prior_timeout{0.5};
+		/// 事前の姿勢から予測した距離と実測の差がこれを超える点を捨てる [m]。0 なら無効
+		float ray_gate{0.f};
+		/// ray_gate で残る点がこの割合を切ったら、事前が外れているとみなしてゲートしない
+		float ray_gate_min_ratio{0.5f};
 		/// 外部の事前を溜めておく長さ [s]。スキャンの遅れ (撮ってから届くまで) より長くする
 		double prior_buffer_duration{1.0};
 		/// 事前分布を solve に渡すか。false ならシードとしてだけ使う
@@ -231,6 +243,9 @@ namespace sotoba_ros {
 			);
 			this->range_min = static_cast<float>(n.declare_parameter<double>("range_min", 0.0));
 			this->range_max = static_cast<float>(n.declare_parameter<double>("range_max", 0.0));
+			this->ray_gate = static_cast<float>(n.declare_parameter<double>("ray_gate", 0.0));
+			this->ray_gate_min_ratio =
+				static_cast<float>(n.declare_parameter<double>("ray_gate_min_ratio", 0.5));
 			this->reset_after_failures = static_cast<std::size_t>(std::max<std::int64_t>(
 				0,
 				n.declare_parameter<std::int64_t>("reset_after_failures", 0)
@@ -452,6 +467,8 @@ namespace sotoba_ros {
 		/// LaserScan を LiDAR 座標系の点群へ。z は 0 (スキャン平面上)。
 		void fill_points(const sensor_msgs::msg::LaserScan& scan) {
 			this->points.clear();
+			this->point_angles.clear();
+			this->point_ranges.clear();
 
 			const float lo = this->range_min > 0.f ? std::max(this->range_min, scan.range_min)
 												   : scan.range_min;
@@ -465,8 +482,62 @@ namespace sotoba_ros {
 				const float angle =
 					scan.angle_min + scan.angle_increment * static_cast<float>(i);
 				this->points.emplace_back(r * std::cos(angle), r * std::sin(angle), 0.f);
+				this->point_angles.push_back(angle);
+				this->point_ranges.push_back(r);
 				if (this->points.size() >= this->max_points) { break; }
 			}
+		}
+
+		/// 事前の姿勢で各光線をモデルに当て、予測した距離と実測が ray_gate 以上ずれる点を捨てる。
+		///
+		/// LiDAR が振動で傾くと、光線が壁を越えて外の物に当たったり (予測より遠い)、
+		/// 床やモデルに無い物 (相手ロボットなど) に当たったりする (予測より近い)。
+		/// 最近接点で対応を取る ICP はこれらを近くの壁に誤って結び付けるので、先に落とす。
+		/// 事前が大きく外れていると正しい点まで落ちるので、残りが ray_gate_min_ratio を切ったらゲートしない。
+		void gate_points_by_ray(const std::vector<Belief>& prior) {
+			if (!(this->ray_gate > 0.f)) { return; }
+
+			this->gate_surfaces.clear();
+			for (std::size_t iobj = 0; iobj < this->objects.size(); ++iobj) {
+				for (const auto& surface : this->objects[iobj].surfaces) {
+					auto& s = this->gate_surfaces.emplace_back(surface);
+					std::visit([&](auto& v) { v.apply_se3(prior[iobj].mean); }, s);
+				}
+			}
+
+			std::size_t kept = 0;
+			for (std::size_t i = 0; i < this->points.size(); ++i) {
+				const UVec3 ray{std::cos(this->point_angles[i]), std::sin(this->point_angles[i]), 0.f};
+				float nearest2 = std::numeric_limits<float>::infinity();
+				for (const auto& s : this->gate_surfaces) {
+					std::visit([&](const auto& v) { nearest2 = std::min(nearest2, v.ray_collision(ray)); }, s);
+				}
+				const float predicted = std::sqrt(nearest2);
+				if (std::isfinite(predicted) && std::fabs(predicted - this->point_ranges[i]) <= this->ray_gate) {
+					// 残す点を前に詰める (角度・距離はもう使わないので詰めない)
+					this->points[kept++] = this->points[i];
+				}
+			}
+
+			const auto total = this->points.size();
+			if (kept < IcpEngine::min_correspondences()
+				|| static_cast<float>(kept) < this->ray_gate_min_ratio * static_cast<float>(total)) {
+				// 詰めた分を戻す
+				for (std::size_t i = 0; i < total; ++i) {
+					const float r = this->point_ranges[i];
+					this->points[i] = Vec3{r * std::cos(this->point_angles[i]), r * std::sin(this->point_angles[i]), 0.f};
+				}
+				RCLCPP_WARN_THROTTLE(
+					this->node.get_logger(),
+					*this->node.get_clock(),
+					5000,
+					"ray_gate would keep only %zu of %zu points; the prior seems off. using all points.",
+					kept,
+					total
+				);
+				return;
+			}
+			this->points.resize(kept);
 		}
 
 		/// 点群容量が足りていればそのまま、足りなければ作り直す。
@@ -636,6 +707,7 @@ namespace sotoba_ros {
 			const rclcpp::Time stamp{scan.header.stamp};
 			std::vector<Belief> prior{};
 			if (!this->build_prior(stamp, prior)) { return; }
+			this->gate_points_by_ray(prior);
 
 			// 事前の平均をシードにし、情報行列ごと solve に渡す。
 			// 観測できない方向は事前のまま残り、1面しか見えないオブジェクトも解ける。
