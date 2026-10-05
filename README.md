@@ -322,6 +322,9 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
   初期ずれが大きいときは `accept_distance_begin` を大きめにして等比で絞ると入りやすい。
 - `max_points` / `point_stride`: 計算量は点数に比例する。UST-10LXなら間引かなくても足りるはず。
 - `sigma_range` / `sigma_angle` / `huber_k`: 外れ値が多いときに効かせる。0で無効。
+- `ray_gate` / `ray_gate_min_ratio`: 事前の姿勢で光線をモデルに当てた予測距離と実測が `ray_gate` [m] より違う点を捨てる。0で無効。
+  LiDAR が傾いて壁を越えた点や床の点を、近くの壁に誤って対応付けないためのもの。事前が外れていると正しい点まで落ちるので、
+  残りが `ray_gate_min_ratio` を切ったスキャンではゲートしない。
 - `reset_after_failures`: 連続失敗が続いたら `initial_pose` に戻す。0で無効。
 - `publish_markers` ほか `marker_*`: RViz2 表示用。上の節を参照。
 
