@@ -87,6 +87,10 @@ namespace sotoba_ros {
 		bool lidar_upside_down{true};
 		/// ノーツを推定対象に含めるか。
 		bool include_notes{true};
+		/// ビンゴ棚をフィールドの形状に含めるか。
+		/// 棚は中実の箱で近似してあるが、実物は格子状で奥まで見える。合わないなら外す
+		/// (棚に当たった点はモデルに無い点になる)。
+		bool include_shelf{true};
 	};
 
 	/// 推定対象のオブジェクト群を作る。実装は src/objects.cpp。

@@ -46,6 +46,8 @@ namespace {
 		);
 		config.include_notes =
 			node.declare_parameter<bool>("include_notes", defaults.include_notes);
+		config.include_shelf =
+			node.declare_parameter<bool>("include_shelf", defaults.include_shelf);
 		config.lidar_upside_down =
 			node.declare_parameter<bool>("lidar_upside_down", defaults.lidar_upside_down);
 
@@ -71,14 +73,15 @@ namespace {
 		RCLCPP_INFO(
 			node.get_logger(),
 			"objects: lidar_height=%.3f wall_height=%.3f start=(%.3f, %.3f, %.3f rad) "
-			"upside_down=%s notes=%s",
+			"upside_down=%s notes=%s shelf=%s",
 			static_cast<double>(config.lidar_height),
 			static_cast<double>(config.wall_height),
 			static_cast<double>(config.start_x),
 			static_cast<double>(config.start_y),
 			static_cast<double>(config.start_yaw),
 			config.lidar_upside_down ? "yes" : "no",
-			config.include_notes ? "yes" : "no"
+			config.include_notes ? "yes" : "no",
+			config.include_shelf ? "yes" : "no"
 		);
 
 		return config;

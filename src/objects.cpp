@@ -182,12 +182,14 @@ namespace sotoba_ros {
 			// 中実の箱として近似する。実機で合わないようならここを外すか、
 			// 支柱を細い箱で並べる形に置き換えること。
 			// centre = (2.0325, 0), width 0.94 (x方向), total_depth 0.6 (y方向), height 0.9
-			surfaces.emplace_back(sotoba::surface::BoxOuter(
-				Vec3{2.0325f, 0.f, 0.45f},
-				SquareMat<3>::ide(),
-				Vec3{0.47f, 0.30f, 0.45f},
-				std::array<bool, 6>{false, false, false, false, true, true}
-			));
+			if (config.include_shelf) {
+				surfaces.emplace_back(sotoba::surface::BoxOuter(
+					Vec3{2.0325f, 0.f, 0.45f},
+					SquareMat<3>::ide(),
+					Vec3{0.47f, 0.30f, 0.45f},
+					std::array<bool, 6>{false, false, false, false, true, true}
+				));
+			}
 
 			return ObjectDef{
 				.name = "field",
