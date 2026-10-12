@@ -38,7 +38,7 @@ namespace {
 	///
 	/// ここは**小さめ**にしてある。大きく動かすと、ノーツのような小さい
 	/// オブジェクトはシードが自分の影から外れて対応点を失うが、それは
-	/// 事前予測 (field_note_predictor) の担当であって、ICP単体の問題ではない。
+	/// 事前分布を出すノードの担当であって、ICP単体の問題ではない。
 	constexpr float robot_shift_x = 0.02f;
 	constexpr float robot_shift_y = -0.012f;
 	constexpr float robot_shift_yaw = 0.006f; // [rad]

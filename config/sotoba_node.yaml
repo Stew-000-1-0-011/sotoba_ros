@@ -80,22 +80,9 @@
     marker_show_labels: true
 
     # --- 事前分布 ---
-    # 次のスキャンの事前分布 (ICP の初期値と不確かさ) をどこから得るか。
-    #   external: 外部の状態推定ノードが ~/prior_beliefs に出すものを使う (既定)。
-    #             来ていなければスキャンを捨てる
-    #   internal: 内蔵の持続予測 (直前の推定のまま、不確かさだけ増やす)。
-    #             状態推定ノード無しで単体で使うとき
-    #   external_or_internal: 外部を優先し、無ければ内蔵
-    # sotoba_node.launch.py は predictor:=false なら internal で上書きする
-    prior_source: "external"
-    # 持続予測で1秒あたりに増やす不確かさ (走査面内: x, y, yaw)
-    process_noise_angular: 0.5  # [rad^2/s]
-    process_noise_linear: 0.5   # [m^2/s]
-    # 走査面外 (z, roll, pitch)。2D LiDAR では観測できない方向なので、
-    # ここを大きくすると事前も観測も情報を持たない方向ができて推定が壊れる。
-    # LiDAR の取付高も傾きも動かないので、ほぼ0でよい
-    process_noise_angular_out_of_plane: 1.0e-8
-    process_noise_linear_out_of_plane: 1.0e-8
+    # sotoba_node は予測をしない。事前分布 (ICP の初期値と不確かさ) は毎スキャン、
+    # 外のノードが ~/prior_beliefs に出したものを使う。来ていなければスキャンを捨てる。
+    # 単体で動かすときは persistence_predictor を一緒に立てる (sotoba_node.launch.py の既定)。
 
     # 事前分布を正規方程式に入れるか。
     # true だと、観測できない方向は事前のまま残り、1面しか見えないオブジェクトも
@@ -110,9 +97,9 @@
     initial_sigma_z: 0.005       # [m]
     initial_sigma_tilt: 0.005    # [rad]
     initial_sigma_yaw: 0.05      # [rad]
-    # 外部の事前がこれより古ければ内蔵にフォールバック [s]
+    # スキャン時刻からこれより古い事前しか無ければ、そのスキャンを捨てる [s]
     prior_timeout: 0.5
-    # 外部の事前を溜めておく長さ [s]。スキャン時刻以前で最新のものを使うので、
+    # 事前を溜めておく長さ [s]。スキャン時刻以前で最新のものを使うので、
     # スキャンの遅れ (撮ってから処理されるまで) より長くすること
     prior_buffer_duration: 1.0
 
@@ -128,9 +115,18 @@
     # (base_link -> スキャンのフレーム をTFから引いて合成する)
     tf_child_frame: ""
 
-    # --- 復帰処理 ---
-    # 連続してこの回数だけ更新に失敗したら初期姿勢へ戻す (0で無効)。
+    # --- persistence_predictor (持続予測で事前を出す最小のノード) ---
+    # sotoba_node.launch.py が同じファイルを渡す。sotoba_node 自身は読まない。
+    publish_rate: 100.0   # [Hz] 事前を出す周期
+    # 1秒あたりに増やす不確かさ (走査面内: x, y, yaw)
+    process_noise_angular: 0.5  # [rad^2/s]
+    process_noise_linear: 0.5   # [m^2/s]
+    # 走査面外 (z, roll, pitch)。2D LiDAR では観測できない方向なので、
+    # ここを大きくすると事前も観測も情報を持たない方向ができて推定が壊れる。
+    # LiDAR の取付高も傾きも動かないので、ほぼ0でよい
+    process_noise_angular_out_of_plane: 1.0e-8
+    process_noise_linear_out_of_plane: 1.0e-8
+    # 連続してこの回数だけ更新に失敗したオブジェクトを初期姿勢へ戻す (0で無効)。
     # シードが 0.1m 以上外れると対応点ゼロのまま発散して戻ってこないので、
-    # 有効にしておくことを推奨。
-    # prior_source が internal のときだけ効く (外部の事前を使うときは、立て直しは事前を出す側の仕事)
+    # 有効にしておくことを推奨
     reset_after_failures: 5

@@ -101,8 +101,7 @@ namespace sotoba_ros {
 		/// 初期ロボット姿勢を通して変換する。
 		///
 		/// 2スキャン目以降、ノーツをフィールドに追従させる (ロボットが動いても
-		/// 見失わないようにする) のは事前予測の仕事で、
-		/// field_note_predictor ノードがやる。
+		/// 見失わないようにする) のは、事前分布を出すノードの仕事。
 		auto make_note(
 			const ObjectsConfig& config,
 			const char* const name,

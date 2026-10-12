@@ -188,17 +188,17 @@ target_link_libraries(fake_scan_publisher
 		${geometry_msgs_TARGETS}
 )
 
-# --- 事前予測ノード (アプリ固有の例) ---
-add_executable(field_note_predictor
-	src/field_note_predictor.cpp
+# --- 事前分布を出す最小のノード (持続予測)。sotoba_node を単体で動かすとき用 ---
+add_executable(persistence_predictor
+	src/persistence_predictor.cpp
 )
-target_link_libraries(field_note_predictor
+target_link_libraries(persistence_predictor
 	PRIVATE
 		sotoba_ros_belief_msg
 		rclcpp::rclcpp
 )
 
-install(TARGETS sotoba_node fake_scan_publisher field_note_predictor
+install(TARGETS sotoba_node fake_scan_publisher persistence_predictor
 	DESTINATION lib/${PROJECT_NAME}
 )
 # sotoba を FetchContent で取ってきた場合は sotoba::sotoba が export できないので、

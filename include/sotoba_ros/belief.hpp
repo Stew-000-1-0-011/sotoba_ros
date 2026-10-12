@@ -3,7 +3,7 @@
 /// @file belief.hpp
 /// オブジェクトの信念分布 (ガウス) と、その時間伝播。
 ///
-/// sotoba_node の内蔵予測と、外部の予測ノードの両方が使う。
+/// 事前分布を出すノード (persistence_predictor など) が使う。
 /// ROSにもICPにも依存しないので単体でテストできる。
 ///
 /// 接空間の成分順序は sotoba (Sophus::SE3f::Tangent) と同じ **(並進, 回転)**。

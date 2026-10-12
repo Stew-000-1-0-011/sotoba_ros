@@ -21,9 +21,9 @@ rosidl が生成するメッセージのコードは rosidl 側の設定で C++2
 | `src/objects.cpp` | **オブジェクトの実体。ここを書き換えて使う** (現在は千葉大ロボコン2026フィールド) |
 | `include/sotoba_ros/icp_engine.hpp` | ICPラッパのインタフェース。sotobaのICPヘッダは出てこない (pimpl) |
 | `src/icp_engine.cpp` | sotobaのICPテンプレートを実体化する唯一のTU |
-| `include/sotoba_ros/belief.hpp` | 信念分布 (平均 + 情報行列) と持続予測。ROS非依存 |
+| `include/sotoba_ros/belief.hpp` | 信念分布 (平均 + 情報行列) と、不確かさを時間で増やす計算。ROS非依存 |
 | `msg/BeliefArray.msg` | 事前/事後をやりとりする契約。外部の予測ノードとの境界 |
-| `src/field_note_predictor.cpp` | 事前予測ノード (アプリ固有の例)。ノーツをフィールドに追従させる |
+| `src/persistence_predictor.cpp` | 事前分布を出す最小のノード (持続予測)。sotoba_node を単体で動かすとき用 |
 | `include/sotoba_ros/markers.hpp` | 形状を RViz2 の Marker にする関数の宣言 |
 | `src/markers.cpp` | 形状 -> MarkerArray の変換 (ICPとは独立の別TU) |
 | `include/sotoba_ros/sotoba_node.hpp` | ノード `SotobaNode` の宣言。オブジェクト群はコンストラクタで受け取る |
@@ -90,21 +90,24 @@ colcon build --packages-select sotoba_ros \
 
 ### 実機
 
-最小構成は **LiDAR ドライバ + sotoba_node の2つだけ**。
+最小構成は **LiDAR ドライバ + sotoba_node + 事前分布を出すノード**。
+sotoba_node は自分では予測をしないので、事前を出すノードが要る。
+`sotoba_node.launch.py` は既定で同梱の `persistence_predictor` (持続予測) を一緒に立てる。
 
 ```bash
 # LiDAR (例: UST-10LX)
 ros2 launch urg_node2 urg_node2.launch.py
 
-# 推定。ノーツも追うなら predictor:=true、見たいなら rviz:=true
-ros2 launch sotoba_ros sotoba_node.launch.py predictor:=true rviz:=true
+# 推定 (sotoba_node + persistence_predictor)。見たいなら rviz:=true。
+# 別のノード (状態推定など) が事前を出すなら predictor:=false
+ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
 ```
 
 | ノード | 要否 | 役割 |
 | --- | --- | --- |
 | LiDARドライバ | 必須 | `/scan` を出す |
 | `sotoba_node` | 必須 | 推定本体 |
-| `field_note_predictor` | ノーツを追うなら | 隠れたノーツをフィールドに追従させる |
+| `persistence_predictor` | 事前を出すノードがほかに無ければ必須 | 直近の推定を、不確かさだけ増やして次の事前にする |
 | `rviz2` | 確認用 | `rviz:=true` で一緒に起動 |
 
 `fake_scan:=true` は合成スキャンを流す検証用なので、実機では**付けないこと**
@@ -122,7 +125,7 @@ ros2 launch sotoba_ros sotoba_node.launch.py predictor:=true rviz:=true
 初期シードなので、実際の置き場所と 0.1m 程度以内で合わせること。
 既定の初期位置で横に 0.20m ずらして試したところ、収束しないどころか
 対応点ゼロのまま発散した (0.05m なら誤差 0.0000m で復帰する)。
-`reset_after_failures` を有効にしておくと初期姿勢に戻れる。
+`persistence_predictor` の `reset_after_failures` を有効にしておくと初期姿勢に戻れる。
 
 いずれも `config/sotoba_node.yaml` のパラメータなので、再ビルドは要らない。
 
@@ -148,7 +151,7 @@ URDF 等で既に LiDAR のフレームに親がいる場合は、`tf_child_fram
 | pub | `~/object_markers` | `visualization_msgs/msg/MarkerArray` (RViz2用、transient local) |
 | pub | `~/posterior_beliefs` | `sotoba_ros/msg/BeliefArray` (全オブジェクト、名前・状態・事後情報行列) |
 | pub | `~/initial_beliefs` | `sotoba_ros/msg/BeliefArray` (定義上の初期姿勢、transient local) |
-| sub | `~/prior_beliefs` | `sotoba_ros/msg/BeliefArray` (外部予測ノードから。`prior_source` 次第) |
+| sub | `~/prior_beliefs` | `sotoba_ros/msg/BeliefArray` (事前分布。全オブジェクトぶん必須。これが来ないとスキャンを捨てる) |
 
 publish される姿勢は「オブジェクトローカル座標系をLiDAR座標系へ写す SE3」、
 すなわち **LiDARから見たオブジェクトの位置姿勢**。
@@ -215,66 +218,35 @@ ICPは前スキャンの推定を次のシードにするが、**ロボットが
 接空間の成分順序は sotoba (Sophus) に合わせて **(並進, 回転)**。
 `tikhonov` も `initial_sigma_*` も `BeliefArray` の情報行列もこの順。
 
-- **内蔵の持続予測** (既定): 平均はそのまま、不確かさだけ増やす。
-  オブジェクト同士の関係は知らない
-- **外部ノード**: `~/prior_beliefs` で与える。オブジェクト同士の連動のような
-  アプリ固有の予測はこちら
+### 事前分布は外から受け取る
 
-`prior_source` で切り替える。
+sotoba_node は**予測をしない**。スキャンをまたいで状態も持たない。毎スキャン、
+`~/prior_beliefs` に届いている事前分布を使って解き、事後を `~/posterior_beliefs` に出すだけ。
+次のスキャンの事前を作る (= 時間を進める) のは、事前を出すノードの仕事になる。
+機体の動き (オドメトリ) やオブジェクト同士の関係といったアプリ固有の知識は、そちらに置く。
 
-| 値 | 挙動 |
-| --- | --- |
-| `internal` (既定) | 内蔵の持続予測のみ。1ノードで完結する |
-| `external` | 外部のみ。事前が来なければそのスキャンを捨てる |
-| `external_or_internal` | 外部を優先し、無ければ内蔵で補う |
+- 事前は**全オブジェクトぶん**入っていること。足りないメッセージは無視する
+  (sotoba_node は前の結果を持ち越さないので、欠けたオブジェクトの初期値が無い)
+- 事前は時刻順に `prior_buffer_duration` (既定 1 s) ぶん溜めておき、
+  スキャンごとに**スキャン時刻以前で最新のもの**をそのまま使う。スキャンの時刻は撮った時刻なので
+  届いた時点ですでに過去になっており、最新の事前はたいていスキャンより新しいため
+- 選んだ事前とスキャンの時刻の差は埋めない。送り手は自分の推定の「今」を
+  `header.stamp` に入れて、スキャン周期より十分速く出し続けること
+- 使える事前が無い (まだ来ていない・どれもスキャンより新しい・`prior_timeout` より古い) ときは、
+  そのスキャンを捨てて警告する
+- 見失ったときの立て直しも、事前を出す側の仕事
+- 起動時は `~/initial_beliefs` (定義上の初期姿勢、transient local) を出す。事前を出すノードはそこから始める
 
-`prior_source` の既定は `external` (外部の状態推定ノードが事前を出す前提)。
-単体で使うときは `internal` にする (`sotoba_node.launch.py` は `predictor:=false` なら `internal` で起動する)。
-`external` のときは `reset_after_failures` は効かない (見失ったときの立て直しは事前を出す側の仕事)。
+### persistence_predictor
 
-外部の事前は時刻順に `prior_buffer_duration` (既定 1 s) ぶん溜めておき、
-スキャンごとに**スキャン時刻以前で最新のもの**を使う。スキャンの時刻は撮った時刻なので
-届いた時点ですでに過去になっており、最新の事前はたいていスキャンより新しいため。
-送り手は自分の推定の「今」を制御周期程度で出し続ければよい。
+同梱の、事前を出す最小のノード。「各オブジェクトは LiDAR から見て静止している」と仮定して、
+直近の事後の平均をそのまま、不確かさだけ経過時間に応じて増やして `publish_rate` (既定 100 Hz) で出す。
+まだ事後が無いうちは初期姿勢を出すので、これで循環が立ち上がる。
+`reset_after_failures` 回続けて更新できなかったオブジェクトは初期姿勢に戻す。
 
-外部の事前は `header.stamp` に「その信念が指す時刻」を入れる。
-スキャン時刻までの差分は sotoba_node が内蔵の持続予測で埋めるので、
-**送り手はスキャン周期を知らなくてよい**。`prior_timeout` より古ければ
-内蔵にフォールバックして警告する。
-
-### field_note_predictor
-
-同梱の事前予測ノード。「ノーツはフィールドに付いている」という関係を入れる:
-
-    ノーツの事前 = フィールドの推定姿勢 x (フィールドから見たノーツの姿勢)
-
-相対姿勢の初期値は `~/initial_beliefs` (objects.cpp の定義) から取り、
-推定が成功するたびに更新する (試合中に動かされてもついていける)。
-推定結果から初期値を作らないのは、最初のスキャンで誤対応したときに
-それを覚え込んでしまうため。
-
-```bash
-ros2 launch sotoba_ros sotoba_node.launch.py fake_scan:=true predictor:=true
-```
-
-`attachments` パラメータ (既定 `["note_*:field"]`) で親子を指定する。
-末尾のワイルドカード1個だけ対応。アプリが違えば書き換えるか、丸ごと差し替える。
-
-### 効果 (合成スキャンでの実測)
-
-ロボットを振幅1.2m/0.6rad・周期4sで動かしながら13オブジェクトを推定した結果:
-
-| | 内蔵のみ | + field_note_predictor |
-| --- | --- | --- |
-| 更新できた数 | 5 / 13 | 6 / 13 |
-| 誤った姿勢 | 0 | 0 |
-| 見えているノーツ | 追従する (誤差0.006m) | 追従する (誤差0.011m) |
-| **壁に隠れたノーツ** | **センサ座標系に取り残されてズレる (0.030m)** | **フィールドと同じ誤差で追従 (0.011m)** |
-
-見えているノーツはこの速度域なら内蔵だけでも追える。差が出るのは
-**隠れているオブジェクト**で、内蔵の持続予測は「センサ座標系で静止」と
-仮定するのでロボットが動くとズレていくが、予測ノードがあれば
-フィールドに付いたまま正しい位置に居続ける。
+機体の動きを知らないので、速く動くと初期値がずれて見失う。オブジェクト同士の関係も知らないので、
+隠れたオブジェクトはセンサ座標系に取り残される。ロボットに載せて使うなら、機体の動きを知っているノード
+(状態推定など) が事前を出すこと (`predictor:=false` で起動して、そのノードを `~/prior_beliefs` につなぐ)。
 
 ## RViz2 で見る
 
@@ -325,7 +297,7 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
 - `ray_gate` / `ray_gate_min_ratio`: 事前の姿勢で光線をモデルに当てた予測距離と実測が `ray_gate` [m] より違う点を捨てる。0で無効。
   LiDAR が傾いて壁を越えた点や床の点を、近くの壁に誤って対応付けないためのもの。事前が外れていると正しい点まで落ちるので、
   残りが `ray_gate_min_ratio` を切ったスキャンではゲートしない。
-- `reset_after_failures`: 連続失敗が続いたら `initial_pose` に戻す。0で無効。
+- `reset_after_failures` (persistence_predictor): 連続失敗が続いたオブジェクトを初期姿勢に戻す。0で無効。
 - `publish_markers` ほか `marker_*`: RViz2 表示用。上の節を参照。
 
 ## 現在のオブジェクト定義 (千葉大ロボコン2026)
@@ -395,7 +367,7 @@ ObjectDef{
 - 2D LiDAR の1スキャンは平面上の点しか無いので、面外自由度 (z, roll, pitch) は
   原理的に決まらない。`tikhonov` で拘束するか、そもそも面外に効く形状を置かないこと。
 - sotoba の README/メモにもある通り、景色の対称性が高いとICPの解は飛ぶことがある。
-  後段で異常値処理をすること (本ノードは `reset_after_failures` 程度しか面倒を見ない)。
+  後段で異常値処理をすること (本ノードは面倒を見ない)。
 - **シードは真の形状より手前に置かないこと**。sotoba の `closest_pdn` は
   センサ原点から見えない最近接点を距離無限で捨てるので、真の表面がシード形状の
   裏側に回ると対応点が丸ごと消える。実際、ポール (半径0.15m) のシードを真値の
