@@ -178,7 +178,8 @@ namespace sotoba_ros {
 				: 0.f,
 			.tikhonov = tikhonov,
 			.weighting = weighting,
-			.priors = std::span<const sotoba::icp_resource::ObjPrior>{this->impl_->priors}
+			.priors = std::span<const sotoba::icp_resource::ObjPrior>{this->impl_->priors},
+			.gate_sigma = params.gate_sigma
 		};
 
 		return from_icp_error(this->impl_->resource.run_icp(points, sotoba_params));

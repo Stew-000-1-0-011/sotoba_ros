@@ -46,6 +46,10 @@ namespace sotoba_ros {
 		std::optional<NoiseParams> noise{};
 		/// 正規化残差に対するHuberの閾値。noise 無指定なら単位は [m]。
 		std::optional<float> huber_k{};
+		/// 点ごとのゲート [σ]。0 なら使わない。正なら、事前の共分散から見た
+		/// 「点と面の距離」の予測の標準偏差 (計測の分散込み) のこの倍より遠い点を捨てる。
+		/// accept_distance (とその段階的な絞り) は上限として残る。
+		float gate_sigma{0.f};
 	};
 
 	/// run() 自体の成否。sotoba::icp_resource::IcpError と1対1。

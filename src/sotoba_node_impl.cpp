@@ -278,6 +278,8 @@ namespace sotoba_ros {
 			}
 			const auto huber_k = n.declare_parameter<double>("huber_k", 0.0);
 			if (huber_k > 0.0) { this->icp_params.huber_k = static_cast<float>(huber_k); }
+			this->icp_params.gate_sigma =
+				static_cast<float>(std::max(0.0, n.declare_parameter<double>("gate_sigma", 0.0)));
 
 			// --- 事前分布 ---
 			// 事前は毎スキャン外部 (~/prior_beliefs) から受け取る。このノードは予測をしない。
