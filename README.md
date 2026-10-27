@@ -115,14 +115,15 @@ ros2 launch sotoba_ros sotoba_node.launch.py params_file:=/path/to/sotoba_node.y
 
 ### 実機で動かす前に必ず確認すること
 
-**LiDAR の取付高と壁の高さ。** `lidar_height` (既定 0.14m) が `wall_height`
-以上だと走査面が壁の上を通るので**何も見えない**。元にしたJSONの壁高 0.3m は
+**LiDAR の取付高と壁の高さ。** `lidar_height` (oumuamua では 0.14m) が `field.wall_height`
+以上だと走査面が壁の上を通るので**何も見えない**。oumuamua の壁高 0.3m は
 「LiDARの走査面より高くするための暫定値」で、**競技規定は 0.1m**。実物を測って
-両方合わせること。ノーツ (0.15m) も同様で、`lidar_height` が 0.15m 以上だと見えない。
+両方合わせること。ノーツも同様で、`lidar_height` が `field.note_size` 以上だと見えない。
 起動時にこの2つは検算していて、危ない設定ならログにエラー/警告を出す。
 
-**初期姿勢。** `start_x` / `start_y` / `start_yaw` / `lidar_upside_down` はICPの
-初期シードなので、実際の置き場所と 0.1m 程度以内で合わせること。
+**初期姿勢。** ICPの初期シード (LiDAR の初期姿勢) は、機体のスタート位置 `field.start_pose` に
+LiDAR の取付 `lidar_x` / `lidar_y` / `lidar_yaw` (と `lidar_upside_down`) を足したもの。
+実際の置き場所と 0.1m 程度以内で合わせること。
 初期位置を横に 0.20m ずらして試したところ、収束しないどころか
 対応点ゼロのまま発散した (0.05m なら誤差 0.0000m で復帰する)。
 `persistence_predictor` の `reset_after_failures` を有効にしておくと初期姿勢に戻れる。
@@ -302,43 +303,31 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
 - `reset_after_failures` (persistence_predictor): 連続失敗が続いたオブジェクトを初期姿勢に戻す。0で無効。
 - `publish_markers` ほか `marker_*`: RViz2 表示用。上の節を参照。
 
-## 現在のオブジェクト定義 (千葉大ロボコン2026)
+## オブジェクト定義 (フィールド)
 
-`src/objects.cpp` の中身は
-[YUKICHI6105/lio_localization_sim](https://github.com/YUKICHI6105/lio_localization_sim)
-の `config/robocon2026_field.json` (branch `feature/eval-fidelity`, schema_version 1)
-を写したもの。座標系もJSONと同じで、原点はフィールド中心の床面、
-+x がスタート→ビンゴ方向、+y が左、+z が上。
+推定する物の形は、すべてパラメータ `field.*` から作る (`src/objects.cpp`、読むのは `include/sotoba_ros/field_params.hpp`)。
+千葉大ロボコン2026のフィールドの値は oumuamua の `src/oumuamua_bringup/config/field.yaml` にあり、
+同じフィールドを使う他のノード (シミュレータ、作業の指示、操作画面) もそこから読む。
+座標系は、原点はフィールド中心の床面、+x がスタート→ビンゴ方向、+y が左、+z が上。
 
-- **外周壁** (`start_end` / `bingo_end` / `left_side` / `right_side`) は
-  ロボットが内側にいるので `BoxInner` 1個にまとめてある。
-  JSONの座標は壁の芯なので、内側の面は半厚 (0.0165m) ぶん内側。
-- **内側の壁** 12本 (センターライン、各バッフル、ノーツ/スラローム境界、
-  ゴール/スラローム境界、ビンゴ棚裏) は、厚み 0.033m・高さ 0.3m の
-  `BoxOuter` としてJSONの線分から作っている。どちら側からも見えるので `BoxOuter`。
-- **ビンゴ棚** は中実の箱として近似 (実際は格子)。走査面の高さで格子の隙間が
-  効くようなら、支柱を細い箱で並べる形に置き換えること。
+| パラメータ | 意味 |
+| --- | --- |
+| `field.bounds` | 外周壁の内側の面 `[xmin, ymin, xmax, ymax]`。ロボットが内側にいるので `BoxInner` 1個にする |
+| `field.wall_height` | 壁の高さ |
+| `field.walls` | 内側の壁 (厚み込みの外形) を `[xmin, ymin, xmax, ymax]` で並べたもの。どちら側からも見えるので `BoxOuter` |
+| `field.shelf` / `field.shelf_height` | ビンゴ棚 (中実の箱で近似、実際は格子)。`include_shelf: false` で外す |
+| `field.notes_x` / `field.notes_y` / `field.note_size` | 自チームのノーツの中心と一辺。相手チームのノーツは y を反転した位置に作る (`include_notes: true` のとき) |
+| `field.start_pose` | 機体のスタート位置 `[x, y, yaw]`。初期シードの元 |
+
 - 全ての箱で**天板と底面を無効化**している。2D LiDAR の点は走査面上にしか無いので、
   面外法線を持つ面は誤対応の元にしかならない。
-- **座標系の原点はフィールド中心の床面** (JSON: `coordinate_system.origin = field_centre_floor`)。
-  +x がスタート→ビンゴ、+y が左、+z が上。
-- 初期姿勢の既定値は「棚から2つ目のスラローム壁 (x=+0.021) の延長線上、
-  センターライン壁までの隙間 (y: 0.0165..0.8715) の中央」= (0.021, 0.444) で、
-  その壁を正面 (+y, yaw = pi/2) に向けた姿勢。`lidar_upside_down: true` なので
-  LiDAR のZ軸は床を向く (x軸まわり180度)。
-  -y 側の半面なら `start_y` と `start_yaw` の符号を反転させる。
-  JSONのミッション `start_to_bingo_left` は (-2.419, 1.354, yaw 0)。
-- **この初期位置からはノーツが1個も見えない** (スラロームの中で壁に囲まれている)。
-  ノーツを取りたいならノーツゾーンが見える位置まで動く必要がある。
+- 壁と棚は軸に平行な箱だけを書ける。斜めの壁が要るなら `objects.cpp` を拡張すること。
 
 ### 実機に合わせて要確認
 
-- `lidar_height` (既定 0.14m) は**必ず実機に合わせること**。
+- `lidar_height` は**必ず実機に合わせること**。
   ここがズレると壁の当たり方が変わる。
-- 壁の高さはJSON側で 0.3m に暫定的に上げてある (規定値は 0.1m)。
-  LiDARの取付高が決まってJSONが戻ったら、こちらも戻すこと。
-- 壁の厚みはJSONに「terminology は 0.033、section 3.2 は 0.038」という食い違いのメモあり。
-- `baffle_left_2` / `baffle_right_2` はJSON側で「ver0731の図面と未照合」扱い。
+- 壁の高さ (`field.wall_height`) は 0.3m に暫定的に上げてある (規定値は 0.1m)。
 - **ノーツ (0.15m 角) はモデル化していない**。走査面 (0.14m) にぎりぎり掛かるが、
   試合中に動くのでフィールドと同じ剛体には入れられず、個別オブジェクトにしても
   1個あたり数点しか当たらない。外れ値として `huber_k` で殴るのが現実的。

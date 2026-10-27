@@ -22,6 +22,7 @@
 #include "sotoba_ros/belief.hpp"
 #include "sotoba_ros/icp_engine.hpp"
 #include "sotoba_ros/objects.hpp"
+#include "robocon2026_field.hpp"
 
 namespace {
 	using namespace sotoba_ros;
@@ -81,7 +82,7 @@ namespace {
 } // namespace
 
 auto main() -> int {
-	const auto objects = make_objects();
+	const auto objects = make_objects(sotoba_ros::test::robocon2026_config());
 	if (objects.empty()) {
 		std::fprintf(stderr, "make_objects() returned nothing.\n");
 		return 1;

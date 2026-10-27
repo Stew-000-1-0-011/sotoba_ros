@@ -53,49 +53,58 @@ namespace sotoba_ros {
 		SE3 initial_pose{};
 	};
 
-	/// オブジェクトを組み立てるときの寸法・初期姿勢。
+	/// 床の上の軸に平行な箱 [m] (フィールド座標系)。
+	struct Box2 final {
+		float xmin{};
+		float ymin{};
+		float xmax{};
+		float ymax{};
+	};
+
+	/// オブジェクトを組み立てるときの寸法・初期姿勢。既定値は持たない (全部パラメータから与える)。
 	///
-	/// 実機に合わせて変える必要があるものを集めてある。
-	/// 既定値は robocon2026_field.json のもの。
-	/// sotoba_node / fake_scan_publisher はこれをROSパラメータから読む
-	/// (再ビルドせずに変えられる)。
+	/// フィールドの寸法 (bounds / walls / shelf / notes) は field_params.hpp の read_field() が
+	/// `field.*` パラメータから読む。
 	struct ObjectsConfig final {
 		/// LiDAR の取付高 [m]。走査面がフィールド床から何mにあるか。
-		/// **実機に合わせて必ず直すこと**。
 		/// これが壁の高さ以上だと壁が1本も見えないし、
-		/// ノーツの1辺 (0.15m) 以上だとノーツも見えない。
-		float lidar_height{0.14f};
-		/// 壁の高さ [m]。JSONでは暫定的に 0.3 に上げてあるが、規定値は 0.1。
-		float wall_height{0.3f};
-		/// 壁の厚み [m] (JSON: walls.thickness)。
-		float wall_thickness{0.033f};
-		/// ロボットの初期位置 [m] と向き [rad] (フィールド座標系)。
+		/// ノーツの1辺以上だとノーツも見えない。
+		float lidar_height{};
+		/// 壁の高さ [m]。
+		float wall_height{};
+		/// 外周壁の内側の面。ロボットはこの中にいる。
+		Box2 bounds{};
+		/// 内側の壁 (厚み込みの外形)。
+		std::vector<Box2> walls{};
+		/// ビンゴ棚 (中実の箱で近似) と、その高さ [m]。
+		Box2 shelf{};
+		float shelf_height{};
+		/// 自チームのノーツの中心 [m]。相手チームのノーツは y を反転した位置に作る。
+		std::vector<float> notes_x{};
+		float notes_y{};
+		/// ノーツ (立方体) の一辺 [m]。
+		float note_size{};
+		/// LiDAR の初期位置 [m] と向き [rad] (フィールド座標系)。
 		/// ICPの初期シードになるので、実際の置き場所と 0.1m 程度以内で合わせること。
-		///
-		/// 既定値は「棚から2つ目のスラローム壁 (x=+0.021) の延長線上、
-		/// センターライン壁までの隙間 (y: 0.0165..0.8715) の中央」で、
-		/// その壁のほうを正面 (+y) に向けた姿勢。
-		/// -y 側の半面に置くなら start_y と start_yaw の符号を反転させる。
-		/// JSONのミッション start_to_bingo_left は (-2.419, 1.354, yaw 0)。
-		float start_x{0.021f};
-		float start_y{0.444f};
-		float start_yaw{1.5707963f}; // +y を向く (pi/2)
+		float start_x{};
+		float start_y{};
+		float start_yaw{};
 		/// LiDAR のZ軸が床を向いている (上下逆さに取り付けてある) か。
 		///
 		/// true なら初期姿勢に x軸まわり180度の回転が入る。
 		/// ここを間違えると姿勢が180度ずれた状態から始まるので、ICPは収束しない。
-		bool lidar_upside_down{true};
+		bool lidar_upside_down{};
 		/// ノーツを推定対象に含めるか。
-		bool include_notes{true};
+		bool include_notes{};
 		/// ビンゴ棚をフィールドの形状に含めるか。
 		/// 棚は中実の箱で近似してあるが、実物は格子状で奥まで見える。合わないなら外す
 		/// (棚に当たった点はモデルに無い点になる)。
-		bool include_shelf{true};
+		bool include_shelf{};
 	};
 
 	/// 推定対象のオブジェクト群を作る。実装は src/objects.cpp。
 	///
 	/// 返り値の順序がそのままオブジェクトのインデックスになり、
 	/// 姿勢はこの順で publish される。オブジェクト数は255個まで (sotoba側の制限)。
-	auto make_objects(const ObjectsConfig& config = {}) -> std::vector<ObjectDef>;
+	auto make_objects(const ObjectsConfig& config) -> std::vector<ObjectDef>;
 } // namespace sotoba_ros

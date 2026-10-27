@@ -23,6 +23,7 @@
 #include <sotoba/math/vec.hpp>
 
 #include "sotoba_ros/objects.hpp"
+#include "robocon2026_field.hpp"
 
 namespace {
 	using sotoba::math::UVec3;
@@ -35,8 +36,9 @@ namespace {
 	public:
 		FakeScanPublisher() : rclcpp::Node{"fake_scan_publisher"} {
 			// sotoba_node と同じ寸法でシミュレーションする
-			const sotoba_ros::ObjectsConfig defaults{};
-			sotoba_ros::ObjectsConfig config{};
+			// テスト用の道具なので既定値を持つ (robocon2026_field.hpp)
+			const sotoba_ros::ObjectsConfig defaults = sotoba_ros::test::robocon2026_config();
+			sotoba_ros::ObjectsConfig config = defaults;
 			config.lidar_height = static_cast<float>(this->declare_parameter<double>(
 				"lidar_height",
 				static_cast<double>(defaults.lidar_height)

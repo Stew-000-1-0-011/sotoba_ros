@@ -1,20 +1,20 @@
 /// @file sotoba_node.cpp
 /// 実行ファイルのエントリポイント。
 /// objects.hpp 由来のオブジェクト群をここで受け取り、ノードへ渡す。
-/// ノード自体はオブジェクトの中身を知らないので、形状を変えたいときは
-/// objects.cpp だけを直せばよい。
-///
-/// 実機に合わせて変えたい寸法 (LiDAR取付高、壁の高さ、初期姿勢) は
-/// ROSパラメータから読む。ここがこのファイルの主な仕事。
+/// フィールドの形 (field.*)、LiDAR の取付、初期姿勢はすべて ROS パラメータから読む
+/// (既定値は持たない)。ここがこのファイルの主な仕事。
 
+#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
 #include "sotoba_ros/objects.hpp"
+#include "sotoba_ros/field_params.hpp"
 #include "sotoba_ros/sotoba_node.hpp"
 
 namespace {
@@ -22,21 +22,20 @@ namespace {
 	auto read_config(rclcpp::Node& node) -> sotoba_ros::ObjectsConfig {
 		sotoba_ros::ObjectsConfig config{};
 
-		config.lidar_height = static_cast<float>(node.declare_parameter<double>(
-			"lidar_height"));
-		config.wall_height = static_cast<float>(node.declare_parameter<double>(
-			"wall_height"));
-		config.wall_thickness = static_cast<float>(node.declare_parameter<double>(
-			"wall_thickness"));
-		config.start_x = static_cast<float>(
-			node.declare_parameter<double>("start_x")
-		);
-		config.start_y = static_cast<float>(
-			node.declare_parameter<double>("start_y")
-		);
-		config.start_yaw = static_cast<float>(
-			node.declare_parameter<double>("start_yaw")
-		);
+		config.lidar_height = static_cast<float>(node.declare_parameter<double>("lidar_height"));
+		// フィールドの形 (field.*)
+		sotoba_ros::read_field(node, config);
+		// 初期シード = LiDAR の初期姿勢。機体のスタート位置 (field.start_pose) に LiDAR の取付 (lidar_x / lidar_y / lidar_yaw) を足す
+		const auto start = node.declare_parameter<std::vector<double>>("field.start_pose");
+		if (start.size() != 3) {
+			throw std::invalid_argument("field.start_pose must be [x, y, yaw]");
+		}
+		const double lidar_x = node.declare_parameter<double>("lidar_x");
+		const double lidar_y = node.declare_parameter<double>("lidar_y");
+		const double lidar_yaw = node.declare_parameter<double>("lidar_yaw");
+		config.start_x = static_cast<float>(start[0] + std::cos(start[2]) * lidar_x - std::sin(start[2]) * lidar_y);
+		config.start_y = static_cast<float>(start[1] + std::sin(start[2]) * lidar_x + std::cos(start[2]) * lidar_y);
+		config.start_yaw = static_cast<float>(start[2] + lidar_yaw);
 		config.include_notes =
 			node.declare_parameter<bool>("include_notes");
 		config.include_shelf =
@@ -54,12 +53,13 @@ namespace {
 				static_cast<double>(config.wall_height)
 			);
 		}
-		if (config.include_notes && config.lidar_height >= 0.15f) {
+		if (config.include_notes && config.lidar_height >= config.note_size) {
 			RCLCPP_WARN(
 				node.get_logger(),
-				"lidar_height (%.3f m) is not below the note size (0.15 m): notes will be "
+				"lidar_height (%.3f m) is not below the note size (%.3f m): notes will be "
 				"invisible to the scan.",
-				static_cast<double>(config.lidar_height)
+				static_cast<double>(config.lidar_height),
+				static_cast<double>(config.note_size)
 			);
 		}
 
