@@ -30,24 +30,24 @@ namespace {
 	class PersistencePredictor final : public rclcpp::Node {
 	public:
 		PersistencePredictor() : rclcpp::Node{"persistence_predictor"} {
-			const double rate = this->declare_parameter<double>("publish_rate", 100.0);
+			const double rate = this->declare_parameter<double>("publish_rate");
 			if (!(rate > 0.0)) { throw std::invalid_argument("publish_rate must be positive"); }
 
 			// 持続予測で1秒あたりに増やす不確かさ。走査面内 (x, y, yaw) と面外 (z, roll, pitch) を分ける。
 			// 面外は 2D LiDAR では観測できないので、大きくすると情報の無い方向ができて推定が壊れる
 			this->noise_.angular_in_plane =
-				static_cast<float>(this->declare_parameter<double>("process_noise_angular", 0.5));
+				static_cast<float>(this->declare_parameter<double>("process_noise_angular"));
 			this->noise_.linear_in_plane =
-				static_cast<float>(this->declare_parameter<double>("process_noise_linear", 0.5));
+				static_cast<float>(this->declare_parameter<double>("process_noise_linear"));
 			this->noise_.angular_out_of_plane = static_cast<float>(
-				this->declare_parameter<double>("process_noise_angular_out_of_plane", 1e-8)
+				this->declare_parameter<double>("process_noise_angular_out_of_plane")
 			);
 			this->noise_.linear_out_of_plane = static_cast<float>(
-				this->declare_parameter<double>("process_noise_linear_out_of_plane", 1e-8)
+				this->declare_parameter<double>("process_noise_linear_out_of_plane")
 			);
 			// 連続してこの回数だけ更新できなかったオブジェクトを、定義上の初期姿勢に戻す (0 で無効)
 			this->reset_after_failures_ = static_cast<std::size_t>(
-				std::max<std::int64_t>(0, this->declare_parameter<std::int64_t>("reset_after_failures", 0))
+				std::max<std::int64_t>(0, this->declare_parameter<std::int64_t>("reset_after_failures"))
 			);
 
 			this->prior_pub_ =
@@ -156,7 +156,14 @@ namespace {
 
 auto main(int argc, char** argv) -> int {
 	rclcpp::init(argc, argv);
-	rclcpp::spin(std::make_shared<PersistencePredictor>());
+	try {
+		rclcpp::spin(std::make_shared<PersistencePredictor>());
+	} catch (const std::exception& e) {
+		// パラメータが足りないときなど (既定値は持たないので、全部パラメータファイルで与える)
+		RCLCPP_FATAL(rclcpp::get_logger("persistence_predictor"), "%s", e.what());
+		rclcpp::shutdown();
+		return 1;
+	}
 	rclcpp::shutdown();
 	return 0;
 }

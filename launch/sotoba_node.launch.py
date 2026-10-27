@@ -17,10 +17,7 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument(
                 "params_file",
-                default_value=PathJoinSubstitution(
-                    [FindPackageShare("sotoba_ros"), "config", "sotoba_node.yaml"]
-                ),
-                description="parameter file for sotoba_node",
+                description="parameter file for sotoba_node and persistence_predictor (required: the nodes have no defaults)",
             ),
             DeclareLaunchArgument(
                 "fake_scan",

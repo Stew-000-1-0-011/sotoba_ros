@@ -228,34 +228,32 @@ namespace sotoba_ros {
 			auto& n = this->node;
 
 			this->max_points = static_cast<std::size_t>(
-				std::max<std::int64_t>(1, n.declare_parameter<std::int64_t>("max_points", 2048))
+				std::max<std::int64_t>(1, n.declare_parameter<std::int64_t>("max_points"))
 			);
 			this->point_stride = static_cast<std::size_t>(
-				std::max<std::int64_t>(1, n.declare_parameter<std::int64_t>("point_stride", 1))
+				std::max<std::int64_t>(1, n.declare_parameter<std::int64_t>("point_stride"))
 			);
-			this->range_min = static_cast<float>(n.declare_parameter<double>("range_min", 0.0));
-			this->range_max = static_cast<float>(n.declare_parameter<double>("range_max", 0.0));
-			this->ray_gate = static_cast<float>(n.declare_parameter<double>("ray_gate", 0.0));
+			this->range_min = static_cast<float>(n.declare_parameter<double>("range_min"));
+			this->range_max = static_cast<float>(n.declare_parameter<double>("range_max"));
+			this->ray_gate = static_cast<float>(n.declare_parameter<double>("ray_gate"));
 			this->ray_gate_min_ratio =
-				static_cast<float>(n.declare_parameter<double>("ray_gate_min_ratio", 0.5));
+				static_cast<float>(n.declare_parameter<double>("ray_gate_min_ratio"));
 
 			this->icp_params.max_loop_num = static_cast<std::uint32_t>(
-				std::max<std::int64_t>(0, n.declare_parameter<std::int64_t>("max_loop_num", 20))
+				std::max<std::int64_t>(0, n.declare_parameter<std::int64_t>("max_loop_num"))
 			);
 			this->icp_params.accept_distance =
-				static_cast<float>(n.declare_parameter<double>("accept_distance", 0.3));
+				static_cast<float>(n.declare_parameter<double>("accept_distance"));
 			this->icp_params.accept_distance_begin =
-				static_cast<float>(n.declare_parameter<double>("accept_distance_begin", 0.0));
+				static_cast<float>(n.declare_parameter<double>("accept_distance_begin"));
 			this->icp_params.convergence_delta =
-				static_cast<float>(n.declare_parameter<double>("convergence_delta", 0.0));
+				static_cast<float>(n.declare_parameter<double>("convergence_delta"));
 
 			// (並進, 回転) の順。2D LiDAR では z / roll / pitch が観測できないので、
 			// LM減衰として既定で強めに入れておく。
 			// (事前分布を使う場合は事前が同じ役目をするので、本来は不要)
 			const auto tikhonov = n.declare_parameter<std::vector<double>>(
-				"tikhonov",
-				std::vector<double>{0.0, 0.0, 1.0, 1.0, 1.0, 0.01}
-			);
+				"tikhonov");
 			if (tikhonov.size() == 6) {
 				for (std::size_t i = 0; i < 6; ++i) {
 					this->icp_params.tikhonov[i] = static_cast<float>(tikhonov[i]);
@@ -270,13 +268,13 @@ namespace sotoba_ros {
 
 			// 重みは 1/sigma^2 になる。事前分布と情報量の単位を揃えるため、
 			// 事前を使うなら実測値を入れておくこと (0だと重み1で単位が意味を持たない)。
-			const auto sigma_range = n.declare_parameter<double>("sigma_range", 0.03);
-			const auto sigma_angle = n.declare_parameter<double>("sigma_angle", 0.005);
+			const auto sigma_range = n.declare_parameter<double>("sigma_range");
+			const auto sigma_angle = n.declare_parameter<double>("sigma_angle");
 			if (sigma_range > 0.0 || sigma_angle > 0.0) {
 				this->icp_params.noise =
 					NoiseParams{static_cast<float>(sigma_range), static_cast<float>(sigma_angle)};
 			}
-			const auto huber_k = n.declare_parameter<double>("huber_k", 0.0);
+			const auto huber_k = n.declare_parameter<double>("huber_k");
 			if (huber_k > 0.0) { this->icp_params.huber_k = static_cast<float>(huber_k); }
 
 			// --- 事前分布 ---
@@ -284,13 +282,13 @@ namespace sotoba_ros {
 			// 初期姿勢の確からしさ (~/initial_beliefs に出す)。面外は「取付で決まっていて動かない」ので厳しく。
 			// (並進, 回転) の順
 			const auto sigma_xy =
-				static_cast<float>(n.declare_parameter<double>("initial_sigma_xy", 0.05));
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_xy"));
 			const auto sigma_z =
-				static_cast<float>(n.declare_parameter<double>("initial_sigma_z", 0.005));
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_z"));
 			const auto sigma_tilt =
-				static_cast<float>(n.declare_parameter<double>("initial_sigma_tilt", 0.005));
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_tilt"));
 			const auto sigma_yaw =
-				static_cast<float>(n.declare_parameter<double>("initial_sigma_yaw", 0.05));
+				static_cast<float>(n.declare_parameter<double>("initial_sigma_yaw"));
 			const std::array<float, 6> sigma{
 				sigma_xy,
 				sigma_xy,
@@ -300,31 +298,31 @@ namespace sotoba_ros {
 				sigma_yaw
 			};
 			this->initial_information = diagonal_information(sigma);
-			this->prior_timeout = n.declare_parameter<double>("prior_timeout", 0.5);
-			this->prior_buffer_duration = n.declare_parameter<double>("prior_buffer_duration", 1.0);
-			this->use_prior = n.declare_parameter<bool>("use_prior", true);
+			this->prior_timeout = n.declare_parameter<double>("prior_timeout");
+			this->prior_buffer_duration = n.declare_parameter<double>("prior_buffer_duration");
+			this->use_prior = n.declare_parameter<bool>("use_prior");
 
 			// --- TF ---
 			// 推定は「LiDAR座標系でのオブジェクトの姿勢」なので、逆に取ると
 			// 「オブジェクト座標系でのLiDARの姿勢」= 自己位置になる。
-			this->publish_tf = n.declare_parameter<bool>("publish_tf", false);
-			this->tf_parent_frame = n.declare_parameter<std::string>("tf_parent_frame", "field");
-			this->tf_object = n.declare_parameter<std::string>("tf_object", "field");
+			this->publish_tf = n.declare_parameter<bool>("publish_tf");
+			this->tf_parent_frame = n.declare_parameter<std::string>("tf_parent_frame");
+			this->tf_object = n.declare_parameter<std::string>("tf_object");
 			// 空ならスキャンの frame_id をそのまま子にする。
 			// URDF等で既に laser の親がいる場合は base_link などを指定する
 			// (その場合 base_link -> スキャンのフレーム をTFから引いて合成する)。
-			this->tf_child_frame = n.declare_parameter<std::string>("tf_child_frame", "");
+			this->tf_child_frame = n.declare_parameter<std::string>("tf_child_frame");
 
 			// --- RViz2 表示 ---
-			this->publish_markers = n.declare_parameter<bool>("publish_markers", true);
+			this->publish_markers = n.declare_parameter<bool>("publish_markers");
 			this->marker_style.line_width =
-				static_cast<float>(n.declare_parameter<double>("marker_line_width", 0.03));
+				static_cast<float>(n.declare_parameter<double>("marker_line_width"));
 			this->marker_style.lifetime =
-				static_cast<float>(n.declare_parameter<double>("marker_lifetime", 0.0));
+				static_cast<float>(n.declare_parameter<double>("marker_lifetime"));
 			this->marker_style.normal_length =
-				static_cast<float>(n.declare_parameter<double>("marker_normal_length", 0.2));
+				static_cast<float>(n.declare_parameter<double>("marker_normal_length"));
 			this->marker_style.show_labels =
-				n.declare_parameter<bool>("marker_show_labels", true);
+				n.declare_parameter<bool>("marker_show_labels");
 		}
 
 		void prepare_objects() {
@@ -401,7 +399,7 @@ namespace sotoba_ros {
 
 		void create_sub() {
 			auto& n = this->node;
-			const auto topic = n.declare_parameter<std::string>("scan_topic", "/scan");
+			const auto topic = n.declare_parameter<std::string>("scan_topic");
 			this->scan_sub = n.create_subscription<sensor_msgs::msg::LaserScan>(
 				topic,
 				rclcpp::SensorDataQoS{},

@@ -20,36 +20,29 @@
 namespace {
 	/// ノードのパラメータから ObjectsConfig を作る。
 	auto read_config(rclcpp::Node& node) -> sotoba_ros::ObjectsConfig {
-		const sotoba_ros::ObjectsConfig defaults{};
 		sotoba_ros::ObjectsConfig config{};
 
 		config.lidar_height = static_cast<float>(node.declare_parameter<double>(
-			"lidar_height",
-			static_cast<double>(defaults.lidar_height)
-		));
+			"lidar_height"));
 		config.wall_height = static_cast<float>(node.declare_parameter<double>(
-			"wall_height",
-			static_cast<double>(defaults.wall_height)
-		));
+			"wall_height"));
 		config.wall_thickness = static_cast<float>(node.declare_parameter<double>(
-			"wall_thickness",
-			static_cast<double>(defaults.wall_thickness)
-		));
+			"wall_thickness"));
 		config.start_x = static_cast<float>(
-			node.declare_parameter<double>("start_x", static_cast<double>(defaults.start_x))
+			node.declare_parameter<double>("start_x")
 		);
 		config.start_y = static_cast<float>(
-			node.declare_parameter<double>("start_y", static_cast<double>(defaults.start_y))
+			node.declare_parameter<double>("start_y")
 		);
 		config.start_yaw = static_cast<float>(
-			node.declare_parameter<double>("start_yaw", static_cast<double>(defaults.start_yaw))
+			node.declare_parameter<double>("start_yaw")
 		);
 		config.include_notes =
-			node.declare_parameter<bool>("include_notes", defaults.include_notes);
+			node.declare_parameter<bool>("include_notes");
 		config.include_shelf =
-			node.declare_parameter<bool>("include_shelf", defaults.include_shelf);
+			node.declare_parameter<bool>("include_shelf");
 		config.lidar_upside_down =
-			node.declare_parameter<bool>("lidar_upside_down", defaults.lidar_upside_down);
+			node.declare_parameter<bool>("lidar_upside_down");
 
 		// 実機で一番やらかしやすいところなので、起動時に検算しておく。
 		if (config.lidar_height >= config.wall_height) {

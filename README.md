@@ -100,7 +100,7 @@ ros2 launch urg_node2 urg_node2.launch.py
 
 # 推定 (sotoba_node + persistence_predictor)。見たいなら rviz:=true。
 # 別のノード (状態推定など) が事前を出すなら predictor:=false
-ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
+ros2 launch sotoba_ros sotoba_node.launch.py params_file:=/path/to/sotoba_node.yaml rviz:=true
 ```
 
 | ノード | 要否 | 役割 |
@@ -123,11 +123,11 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
 
 **初期姿勢。** `start_x` / `start_y` / `start_yaw` / `lidar_upside_down` はICPの
 初期シードなので、実際の置き場所と 0.1m 程度以内で合わせること。
-既定の初期位置で横に 0.20m ずらして試したところ、収束しないどころか
+初期位置を横に 0.20m ずらして試したところ、収束しないどころか
 対応点ゼロのまま発散した (0.05m なら誤差 0.0000m で復帰する)。
 `persistence_predictor` の `reset_after_failures` を有効にしておくと初期姿勢に戻れる。
 
-いずれも `config/sotoba_node.yaml` のパラメータなので、再ビルドは要らない。
+いずれもパラメータファイルの値なので、再ビルドは要らない。
 
 ### 自己位置として使う (TF)
 
@@ -255,7 +255,7 @@ sotoba_node は**予測をしない**。スキャンをまたいで状態も持�
 
 ```bash
 # 実機のLiDARがあるとき
-ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true
+ros2 launch sotoba_ros sotoba_node.launch.py params_file:=/path/to/sotoba_node.yaml rviz:=true
 # 手元で動きだけ見たいとき (合成スキャンを一緒に流す)
 ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
 ```
@@ -284,10 +284,12 @@ ros2 launch sotoba_ros sotoba_node.launch.py rviz:=true fake_scan:=true
 
 ## パラメータ
 
-`config/sotoba_node.yaml` に全部コメント付きで並べてある。要点だけ:
+**パラメータに既定値は無い。** sotoba_node も persistence_predictor も、全部パラメータファイルで与える
+(足りなければ起動時にエラーで止まる)。全項目をコメント付きで並べた例が oumuamua の
+`src/oumuamua_bringup/config/sotoba_node.yaml` にある。要点だけ:
 
 - `tikhonov` (6要素, 回転3 + 並進3): **2D LiDARでは roll / pitch / z が観測できない**ので、
-  該当成分 (添字 0, 1, 5) には正の値を入れておくこと。既定は `[1, 1, 0.01, 0, 0, 1]`。
+  該当成分 (添字 0, 1, 5) には正の値を入れておくこと。例は `[1, 1, 0.01, 0, 0, 1]`。
   yaw (添字2) の僅かな値は、円柱のような回転対称オブジェクトで正規方程式がランク落ちして
   `solve_failed` になるのを防ぐためのもの。
 - `accept_distance`: 対応点として採用する距離 [m]。大きすぎると誤対応、小さすぎると収束しない。
