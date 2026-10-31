@@ -26,9 +26,17 @@ namespace {
 		// フィールドの形 (field.*)
 		sotoba_ros::read_field(node, config);
 		// 初期シード = LiDAR の初期姿勢。機体のスタート位置 (field.start_pose) に LiDAR の取付 (lidar_x / lidar_y / lidar_yaw) を足す
-		const auto start = node.declare_parameter<std::vector<double>>("field.start_pose");
+		auto start = node.declare_parameter<std::vector<double>>("field.start_pose");
 		if (start.size() != 3) {
 			throw std::invalid_argument("field.start_pose must be [x, y, yaw]");
+		}
+		// start_pose は自チームが +y 側にあるとして書いてある。赤 (-y 側) なら y について反転する
+		const auto team = node.declare_parameter<std::string>("field.team");
+		if (team != "blue" && team != "red") {
+			throw std::invalid_argument("field.team must be blue or red");
+		}
+		if (team == "red") {
+			start = {start[0], -start[1], -start[2]};
 		}
 		const double lidar_x = node.declare_parameter<double>("lidar_x");
 		const double lidar_y = node.declare_parameter<double>("lidar_y");
